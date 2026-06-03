@@ -26,6 +26,9 @@ class JarvisConfig:
     # Control mode
     control_mode: Literal["prompt", "api", "both"] = "both"
 
+    # Prompting strategy
+    solution_strategy: Literal["direct", "step_by_step", "prompt_generation", "expert_panel"] = "direct"
+
     def to_dict(self) -> dict:
         return asdict(self)
 
@@ -72,6 +75,8 @@ class JarvisConfig:
             raise ValueError("response_format must be one of: plain, bullet_list, numbered_list")
         if key == "control_mode" and value not in ("prompt", "api", "both"):
             raise ValueError("control_mode must be one of: prompt, api, both")
+        if key == "solution_strategy" and value not in ("direct", "step_by_step", "prompt_generation", "expert_panel"):
+            raise ValueError("solution_strategy must be one of: direct, step_by_step, prompt_generation, expert_panel")
         if key == "temperature" and not (0.0 <= float(raw_value) <= 2.0):
             raise ValueError("temperature must be between 0.0 and 2.0")
         if key == "top_p" and not (0.0 <= float(raw_value) <= 1.0):
