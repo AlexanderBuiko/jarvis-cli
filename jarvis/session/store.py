@@ -16,6 +16,7 @@ class SessionEntry:
     config_snapshot: dict        # copy of config at the time of the request
     final_response: str
     finish_reason: str | None = None
+    generated_prompt: str | None = None
     clarifications: list[tuple[str, str]] = field(default_factory=list)
 
 
@@ -29,6 +30,7 @@ class SessionStore:
         cfg: JarvisConfig,
         final_response: str,
         finish_reason: str | None = None,
+        generated_prompt: str | None = None,
         clarifications: list[tuple[str, str]] | None = None,
     ) -> None:
         entry = SessionEntry(
@@ -37,6 +39,7 @@ class SessionStore:
             config_snapshot=cfg.to_dict(),
             final_response=final_response,
             finish_reason=finish_reason,
+            generated_prompt=generated_prompt,
             clarifications=clarifications or [],
         )
         self._entries.append(entry)
@@ -70,6 +73,15 @@ class SessionStore:
             ]
             for k, v in entry.config_snapshot.items():
                 lines.append(f"    {k} = {v}")
+
+            if entry.generated_prompt is not None:
+                lines += [
+                    "",
+                    "  Generated Prompt:",
+                    "",
+                ]
+                for line in entry.generated_prompt.splitlines():
+                    lines.append(f"    {line}")
 
             lines += [
                 "",

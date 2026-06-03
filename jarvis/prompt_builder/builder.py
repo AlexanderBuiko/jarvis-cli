@@ -52,6 +52,49 @@ def build_clarification_prompt(cfg: JarvisConfig, question_number: int) -> str:
     )
 
 
+def build_strategy_prompt(cfg: JarvisConfig, user_request: str) -> str:
+    """Wrap *user_request* with strategy-specific reasoning instructions.
+
+    Returns the (possibly augmented) user message for the final answer call.
+    For ``direct`` and ``prompt_generation`` the request is returned unchanged
+    (``prompt_generation`` is handled separately in the REPL loop).
+    """
+    if cfg.solution_strategy == "step_by_step":
+        return (
+            "Solve the problem step by step.\n"
+            "Show your reasoning clearly.\n"
+            "Provide the final answer separately.\n\n"
+            f"{user_request}"
+        )
+
+    if cfg.solution_strategy == "expert_panel":
+        return (
+            "You are a panel of three experts:\n"
+            "  - Expert 1 (Analyst): analyse the problem thoroughly.\n"
+            "  - Expert 2 (Engineer): propose a concrete solution.\n"
+            "  - Expert 3 (Critic): challenge assumptions and improve the answer.\n\n"
+            "Each expert addresses the problem independently.\n"
+            "Then provide a consolidated final answer.\n\n"
+            f"{user_request}"
+        )
+
+    # "direct" and "prompt_generation" stage-2 — no augmentation here
+    return user_request
+
+
+def build_prompt_generation_request(user_request: str) -> str:
+    """Stage-1 prompt for the ``prompt_generation`` strategy.
+
+    Asks the model to produce the best possible prompt for solving the task.
+    """
+    return (
+        "Create the most effective prompt that would help an AI solve the "
+        "following task accurately.\n\n"
+        f"Task:\n{user_request}\n\n"
+        "Output only the prompt itself, with no explanation or commentary."
+    )
+
+
 def build_final_prompt(cfg: JarvisConfig, original_request: str, clarifications: list[tuple[str, str]]) -> str:
     """
     Build the final user message that includes the original request and all

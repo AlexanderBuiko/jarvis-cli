@@ -16,6 +16,7 @@ Commands
   help                    Show this help message
   config show             Show current configuration
   config set <key> <val>  Change a configuration value
+  config update <k=v> …   Update multiple values in one command
   config reset            Reset all settings to defaults
   session results         Show all interactions from this session
   exit / quit             Exit Jarvis
@@ -44,10 +45,18 @@ Configuration keys
 
   control_mode            prompt | api | both
 
+  solution_strategy       Prompting strategy for the answer:
+                            direct          — send request as-is (default)
+                            step_by_step    — ask for explicit reasoning steps
+                            prompt_generation — two-stage: generate a prompt,
+                                              then use it to answer
+                            expert_panel    — three-expert perspective + synthesis
+
 Examples
 ────────
   config set temperature 0.8
-  config set response_format bullet_list
+  config set solution_strategy step_by_step
+  config update response_format=bullet_list max_words=50 solution_strategy=expert_panel
   config set clarification_questions 2
   config set control_mode prompt
   config set prompt_stop_enabled true
@@ -77,6 +86,16 @@ def handle_config_set(args: list[str], config_manager: ConfigManager) -> str:
 def handle_config_reset(config_manager: ConfigManager) -> str:
     config_manager.reset()
     return "Configuration reset to defaults."
+
+
+def handle_config_update(args: list[str], config_manager: ConfigManager) -> str:
+    if not args:
+        return "Usage: config update <key=value> [<key=value> ...]"
+    try:
+        result = config_manager.update(args)
+        return f"Updated:\n{result}"
+    except (ValueError, TypeError) as exc:
+        return f"Error: {exc}"
 
 
 def handle_session_results(session_store: SessionStore) -> str:

@@ -29,6 +29,32 @@ class ConfigManager:
         self._save_persisted()
         return confirmation
 
+    def update(self, pairs: list[str]) -> str:
+        """Apply multiple key=value pairs in one call and persist once.
+
+        Each element of *pairs* must be a 'key=value' string.
+        All pairs are validated before any are applied; if one fails the
+        config is left unchanged.
+        """
+        parsed: list[tuple[str, str]] = []
+        for pair in pairs:
+            if "=" not in pair:
+                raise ValueError(f"Invalid syntax '{pair}'. Expected key=value.")
+            key, _, raw_value = pair.partition("=")
+            parsed.append((key.strip(), raw_value.strip()))
+
+        # Validate all pairs first (dry-run against a throw-away copy)
+        draft = JarvisConfig.from_dict(self._runtime.to_dict())
+        confirmations: list[str] = []
+        for key, raw_value in parsed:
+            confirmations.append(draft.set_field(key, raw_value))
+
+        # All valid — apply to real runtime config and persist
+        for key, raw_value in parsed:
+            self._runtime.set_field(key, raw_value)
+        self._save_persisted()
+        return "\n".join(f"  {c}" for c in confirmations)
+
     def reset(self) -> None:
         """Reset all config to defaults and clear the persisted file."""
         self._runtime = JarvisConfig()

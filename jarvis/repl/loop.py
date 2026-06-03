@@ -11,6 +11,7 @@ from .commands import (
     handle_help,
     handle_config_show,
     handle_config_set,
+    handle_config_update,
     handle_config_reset,
     handle_session_results,
 )
@@ -20,6 +21,8 @@ from ..prompt_builder.builder import (
     build_system_prompt,
     build_clarification_prompt,
     build_final_prompt,
+    build_strategy_prompt,
+    build_prompt_generation_request,
 )
 from ..session.store import SessionStore
 
@@ -78,6 +81,8 @@ def _dispatch(
             return handle_config_set(args[1:], config_manager)
         if sub == "reset":
             return handle_config_reset(config_manager)
+        if sub == "update":
+            return handle_config_update(args[1:], config_manager)
         return f"Unknown config sub-command: '{sub}'"
 
     if cmd == "session":
@@ -129,7 +134,28 @@ def _handle_llm_request(
         clarifications.append((question.strip(), user_answer))
 
     # ── Final answer ──────────────────────────────────────────────────────────
-    final_user_message = build_final_prompt(cfg, user_request, clarifications)
+    base_message = build_final_prompt(cfg, user_request, clarifications)
+    generated_prompt: str | None = None
+
+    if cfg.solution_strategy == "prompt_generation":
+        # Stage 1: ask the model to generate the best prompt for this task
+        stage1_messages = _build_messages(
+            system_prompt=system_prompt,
+            user_request=build_prompt_generation_request(base_message),
+            clarifications=[],
+            extra_instruction=None,
+        )
+        try:
+            generated_prompt, _ = client.complete(stage1_messages, cfg)
+        except Exception as exc:
+            return f"API error (prompt generation stage): {exc}"
+        generated_prompt = generated_prompt.strip()
+
+        # Stage 2: solve the task using the generated prompt
+        final_user_message = generated_prompt
+    else:
+        # direct / step_by_step / expert_panel
+        final_user_message = build_strategy_prompt(cfg, base_message)
 
     messages = _build_messages(
         system_prompt=system_prompt,
@@ -153,6 +179,7 @@ def _handle_llm_request(
         cfg=cfg,
         final_response=display_response,
         finish_reason=finish_reason,
+        generated_prompt=generated_prompt,
         clarifications=clarifications,
     )
 
@@ -168,7 +195,7 @@ def _build_messages(
     """
     Build the messages list for the API call.
 
-    clarifications is used when we want to replay Q&A as multi-turn history
+    clarifications are used when we want to replay Q&A as multi-turn history
     (only during the clarification loop itself, not for the final call where
     everything is folded into one user message).
     """
