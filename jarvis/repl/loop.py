@@ -114,7 +114,7 @@ def _handle_llm_request(
         )
 
         try:
-            question = client.complete(messages, cfg)
+            question, _ = client.complete(messages, cfg)
         except Exception as exc:
             return f"API error: {exc}"
 
@@ -139,7 +139,7 @@ def _handle_llm_request(
     )
 
     try:
-        response = client.complete(messages, cfg)
+        response, finish_reason = client.complete(messages, cfg)
     except Exception as exc:
         return f"API error: {exc}"
 
@@ -152,6 +152,7 @@ def _handle_llm_request(
         original_request=user_request,
         cfg=cfg,
         final_response=display_response,
+        finish_reason=finish_reason,
         clarifications=clarifications,
     )
 

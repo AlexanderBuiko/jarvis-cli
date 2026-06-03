@@ -24,8 +24,8 @@ class OpenRouterClient:
         self,
         messages: list[dict],
         cfg: JarvisConfig,
-    ) -> str:
-        """Send messages and return the assistant reply text."""
+    ) -> tuple[str, str | None]:
+        """Send messages and return (reply_text, finish_reason)."""
         payload = self._build_payload(messages, cfg)
         response = requests.post(
             API_URL,
@@ -34,7 +34,8 @@ class OpenRouterClient:
             timeout=60,
         )
         self._raise_for_status(response)
-        return self._extract_text(response.json())
+        data = response.json()
+        return self._extract_text(data), self._extract_finish_reason(data)
 
     # ── Internals ─────────────────────────────────────────────────────────────
 
@@ -99,3 +100,10 @@ class OpenRouterClient:
             return data["choices"][0]["message"]["content"]
         except (KeyError, IndexError) as exc:
             raise RuntimeError(f"Unexpected API response shape: {data}") from exc
+
+    @staticmethod
+    def _extract_finish_reason(data: dict) -> str | None:
+        try:
+            return data["choices"][0].get("finish_reason")
+        except (KeyError, IndexError):
+            return None

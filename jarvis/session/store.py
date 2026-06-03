@@ -15,6 +15,7 @@ class SessionEntry:
     original_request: str
     config_snapshot: dict        # copy of config at the time of the request
     final_response: str
+    finish_reason: str | None = None
     clarifications: list[tuple[str, str]] = field(default_factory=list)
 
 
@@ -27,6 +28,7 @@ class SessionStore:
         original_request: str,
         cfg: JarvisConfig,
         final_response: str,
+        finish_reason: str | None = None,
         clarifications: list[tuple[str, str]] | None = None,
     ) -> None:
         entry = SessionEntry(
@@ -34,6 +36,7 @@ class SessionStore:
             original_request=original_request,
             config_snapshot=cfg.to_dict(),
             final_response=final_response,
+            finish_reason=finish_reason,
             clarifications=clarifications or [],
         )
         self._entries.append(entry)
@@ -75,7 +78,12 @@ class SessionStore:
             ]
             for line in entry.final_response.splitlines():
                 lines.append(f"    {line}")
-            lines.append("")
+
+            lines += [
+                "",
+                f"  Finish reason: {entry.finish_reason}",
+                "",
+            ]
 
             sections.append("\n".join(lines))
 
