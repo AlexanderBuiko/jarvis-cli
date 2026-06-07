@@ -1,0 +1,12 @@
+{
+  "name": "response_control",
+  "description": "Response format, length, and stop sequence experiments.",
+  "params": {
+    "max_tokens": 200,
+    "response_format": "plain",
+    "max_words": 200,
+    "prompt_stop_enabled": false,
+    "api_stop_enabled": false,
+    "stop_sequence": "###END###"
+  }
+}

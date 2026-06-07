@@ -6,6 +6,7 @@ flow (including the clarification question loop).
 """
 
 import sys
+from typing import Any
 
 from .commands import (
     handle_help,
@@ -13,10 +14,12 @@ from .commands import (
     handle_config_set,
     handle_config_update,
     handle_config_reset,
+    handle_mode_show,
+    handle_mode_set,
     handle_session_results,
 )
 from ..config.manager import ConfigManager
-from ..openrouter.client import OpenRouterClient
+from ..openrouter.client import OpenRouterClient, Completion
 from ..prompt_builder.builder import (
     build_system_prompt,
     build_clarification_prompt,
@@ -63,7 +66,6 @@ def _dispatch(
     cmd = tokens[0].lower()
     args = tokens[1:]
 
-    # Built-in commands
     if cmd in ("exit", "quit"):
         print("Goodbye.")
         sys.exit(0)
@@ -71,9 +73,14 @@ def _dispatch(
     if cmd == "help":
         return handle_help()
 
+    if cmd == "mode":
+        if not args:
+            return handle_mode_show(config_manager)
+        return handle_mode_set(args[0].lower(), config_manager)
+
     if cmd == "config":
         if not args:
-            return "Usage: config show | config set <key> <value> | config reset"
+            return "Usage: config show | config set <key> <value> | config update <k=v>... | config reset"
         sub = args[0].lower()
         if sub == "show":
             return handle_config_show(config_manager)
@@ -90,11 +97,10 @@ def _dispatch(
             return handle_session_results(session_store)
         return "Usage: session results"
 
-    # Anything else is treated as a question/request to the LLM
     return _handle_llm_request(raw, config_manager, client, session_store)
 
 
-# ── LLM interaction (including clarification loop) ────────────────────────────
+# ── LLM interaction ───────────────────────────────────────────────────────────
 
 
 def _handle_llm_request(
@@ -103,13 +109,17 @@ def _handle_llm_request(
     client: OpenRouterClient,
     session_store: SessionStore,
 ) -> str:
-    cfg = config_manager.current
-    system_prompt = build_system_prompt(cfg)
+    params = config_manager.runtime
+    system_prompt = build_system_prompt(params)
     clarifications: list[tuple[str, str]] = []
 
+    # Ordered log of every OpenRouter call made during this interaction.
+    api_calls: list[dict] = []
+
     # ── Clarification loop ────────────────────────────────────────────────────
-    for q_num in range(1, cfg.clarification_questions + 1):
-        clarify_instruction = build_clarification_prompt(cfg, q_num)
+    total_clarifications = params.get("clarification_questions", 0)
+    for q_num in range(1, total_clarifications + 1):
+        clarify_instruction = build_clarification_prompt(params, q_num)
 
         messages = _build_messages(
             system_prompt=system_prompt,
@@ -119,11 +129,17 @@ def _handle_llm_request(
         )
 
         try:
-            question, _ = client.complete(messages, cfg)
+            c = client.complete(messages, params)
         except Exception as exc:
             return f"API error: {exc}"
 
-        print(f"\nA: {question.strip()}\n")
+        api_calls.append(_make_call_record(
+            index=len(api_calls) + 1,
+            label=f"clarification_round_{q_num}_of_{total_clarifications}",
+            completion=c,
+        ))
+
+        print(f"\nA: {c.text.strip()}\n")
 
         try:
             user_answer = input(PROMPT).strip()
@@ -131,14 +147,13 @@ def _handle_llm_request(
             print("\nGoodbye.")
             sys.exit(0)
 
-        clarifications.append((question.strip(), user_answer))
+        clarifications.append((c.text.strip(), user_answer))
 
     # ── Final answer ──────────────────────────────────────────────────────────
-    base_message = build_final_prompt(cfg, user_request, clarifications)
+    base_message = build_final_prompt(user_request, clarifications)
     generated_prompt: str | None = None
 
-    if cfg.solution_strategy == "prompt_generation":
-        # Stage 1: ask the model to generate the best prompt for this task
+    if params.get("solution_strategy") == "prompt_generation":
         stage1_messages = _build_messages(
             system_prompt=system_prompt,
             user_request=build_prompt_generation_request(base_message),
@@ -146,44 +161,75 @@ def _handle_llm_request(
             extra_instruction=None,
         )
         try:
-            generated_prompt, _ = client.complete(stage1_messages, cfg)
+            stage1 = client.complete(stage1_messages, {})
         except Exception as exc:
             return f"API error (prompt generation stage): {exc}"
-        generated_prompt = generated_prompt.strip()
 
-        # Stage 2: solve the task using the generated prompt
+        generated_prompt = stage1.text.strip()
+        api_calls.append(_make_call_record(
+            index=len(api_calls) + 1,
+            label="prompt_generation_stage1",
+            completion=stage1,
+        ))
         final_user_message = generated_prompt
     else:
-        # direct / step_by_step / expert_panel
-        final_user_message = build_strategy_prompt(cfg, base_message)
+        final_user_message = build_strategy_prompt(params, base_message)
 
     messages = _build_messages(
         system_prompt=system_prompt,
         user_request=final_user_message,
-        clarifications=[],  # already embedded in final_user_message
+        clarifications=[],
         extra_instruction=None,
     )
 
     try:
-        response, finish_reason = client.complete(messages, cfg)
+        completion = client.complete(messages, params)
     except Exception as exc:
         return f"API error: {exc}"
 
-    # Strip the stop marker from the displayed output (if present)
-    display_response = response.strip()
-    if cfg.prompt_stop_enabled and display_response.endswith(cfg.stop_sequence):
-        display_response = display_response[: -len(cfg.stop_sequence)].rstrip()
+    api_calls.append(_make_call_record(
+        index=len(api_calls) + 1,
+        label="final_answer",
+        completion=completion,
+    ))
+
+    display_response = completion.text.strip()
+    stop_seq = params.get("stop_sequence", "")
+    if params.get("prompt_stop_enabled") and stop_seq and display_response.endswith(stop_seq):
+        display_response = display_response[: -len(stop_seq)].rstrip()
 
     session_store.add(
         original_request=user_request,
-        cfg=cfg,
+        config_snapshot=dict(params),
         final_response=display_response,
-        finish_reason=finish_reason,
+        finish_reason=completion.finish_reason,
+        api_calls=api_calls,
         generated_prompt=generated_prompt,
         clarifications=clarifications,
     )
 
     return f"A: {display_response}"
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def _make_call_record(index: int, label: str, completion: Completion) -> dict:
+    """Build one entry for the api_calls trace list."""
+    raw_resp = completion.response
+    choice = raw_resp.get("choices", [{}])[0] if raw_resp else {}
+    return {
+        "index": index,
+        "label": label,
+        "request": completion.request,
+        "response": {
+            "content": completion.text,
+            "finish_reason": completion.finish_reason,
+            "usage": raw_resp.get("usage"),
+            "model": raw_resp.get("model"),
+            "id": raw_resp.get("id"),
+        },
+    }
 
 
 def _build_messages(
@@ -192,18 +238,9 @@ def _build_messages(
     clarifications: list[tuple[str, str]],
     extra_instruction: str | None,
 ) -> list[dict]:
-    """
-    Build the messages list for the API call.
-
-    clarifications are used when we want to replay Q&A as multi-turn history
-    (only during the clarification loop itself, not for the final call where
-    everything is folded into one user message).
-    """
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
 
-    # Replay clarification history as alternating turns
     if clarifications:
-        # First user turn is the original request
         messages.append({"role": "user", "content": user_request})
         for question, answer in clarifications:
             messages.append({"role": "assistant", "content": question})
@@ -214,7 +251,6 @@ def _build_messages(
             content = f"{extra_instruction}\n\nUser request: {user_request}"
         messages.append({"role": "user", "content": content})
 
-    # Attach the extra instruction when in clarification loop with history
     if clarifications and extra_instruction:
         messages.append({"role": "user", "content": extra_instruction})
 

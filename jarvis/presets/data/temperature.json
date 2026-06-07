@@ -1,0 +1,7 @@
+{
+  "name": "temperature",
+  "description": "Temperature experiments — only temperature is sent besides model and messages.",
+  "params": {
+    "temperature": 0.7
+  }
+}

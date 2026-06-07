@@ -1,65 +1,76 @@
 """
-Builds system and user prompts dynamically based on active configuration.
+Builds system and user prompts from the active mode's runtime params dict.
 
-Prompt-level controls are injected here as natural-language instructions.
-API-level controls are passed separately in the API request (see openrouter/).
+All functions accept *params* — the mode's live configuration snapshot.
+A key's mere presence in the dict activates the corresponding behaviour;
+absence means the feature is off for that mode.
 """
 
-from ..config.schema import JarvisConfig
+from typing import Any
 
 
-_FORMAT_INSTRUCTIONS = {
+_FORMAT_INSTRUCTIONS: dict[str, str] = {
     "plain": "Respond in plain prose.",
     "bullet_list": "Format your response as a bullet list.",
     "numbered_list": "Format your response as a numbered list.",
 }
 
+_STEP_BY_STEP_INSTRUCTION = (
+    "Think through this problem step by step. "
+    "Show your reasoning clearly before stating your final answer."
+)
 
-def build_system_prompt(cfg: JarvisConfig) -> str:
-    """Return a system prompt that encodes all active prompt-level controls."""
-    use_prompt_controls = cfg.control_mode in ("prompt", "both")
+_EXPERT_PANEL_INSTRUCTION = (
+    "You are facilitating a panel of three domain experts with different perspectives. "
+    "Present each expert's view briefly, then synthesise a final answer that integrates "
+    "the strongest points from all perspectives."
+)
 
+
+def build_system_prompt(params: dict[str, Any]) -> str:
+    """Return the system prompt implied by the active mode's params."""
     lines = ["You are Jarvis, a helpful and concise assistant."]
 
-    if use_prompt_controls:
-        # Response format
-        fmt_instruction = _FORMAT_INSTRUCTIONS.get(cfg.response_format, "")
-        if fmt_instruction:
-            lines.append(fmt_instruction)
+    # Response format (response_control mode)
+    if "response_format" in params:
+        instruction = _FORMAT_INSTRUCTIONS.get(params["response_format"], "")
+        if instruction:
+            lines.append(instruction)
 
-        # Length constraint
-        lines.append(f"Keep your response to a maximum of {cfg.max_words} words.")
+    # Length constraint (response_control mode)
+    if "max_words" in params:
+        lines.append(f"Keep your response to a maximum of {params['max_words']} words.")
 
-        # Explicit stop marker
-        if cfg.prompt_stop_enabled:
-            lines.append(
-                f'When you have finished your response, write exactly "{cfg.stop_sequence}" on its own line.'
-            )
+    # Prompt-level stop marker (response_control mode, when enabled)
+    if params.get("prompt_stop_enabled") and "stop_sequence" in params:
+        lines.append(
+            f'When you have finished your response, write exactly '
+            f'"{params["stop_sequence"]}" on its own line.'
+        )
+
+    # Reasoning strategy (prompting mode)
+    if "solution_strategy" in params:
+        strategy = params["solution_strategy"]
+        if strategy == "step_by_step":
+            lines.append(_STEP_BY_STEP_INSTRUCTION)
+        elif strategy == "expert_panel":
+            lines.append(_EXPERT_PANEL_INSTRUCTION)
+        # "direct" and "prompt_generation" add nothing here.
+        # "prompt_generation" is handled as a two-phase flow in the REPL loop.
 
     return "\n".join(lines)
 
 
-def build_clarification_prompt(cfg: JarvisConfig, question_number: int) -> str:
+def build_strategy_prompt(params: dict[str, Any], user_request: str) -> str:
+    """Wrap *user_request* with strategy-specific instructions for the user turn.
+
+    Only ``step_by_step`` and ``expert_panel`` augment the message here.
+    ``direct`` and ``prompt_generation`` pass the request through unchanged
+    (``prompt_generation`` phase-2 message is produced by the REPL loop).
     """
-    Return an instruction that tells the model to ask ONE clarification question.
+    strategy = params.get("solution_strategy", "direct")
 
-    question_number is 1-based.
-    """
-    return (
-        f"Before answering, ask clarification question {question_number} of "
-        f"{cfg.clarification_questions}. Ask only this single question now. "
-        "Do not answer the original request yet."
-    )
-
-
-def build_strategy_prompt(cfg: JarvisConfig, user_request: str) -> str:
-    """Wrap *user_request* with strategy-specific reasoning instructions.
-
-    Returns the (possibly augmented) user message for the final answer call.
-    For ``direct`` and ``prompt_generation`` the request is returned unchanged
-    (``prompt_generation`` is handled separately in the REPL loop).
-    """
-    if cfg.solution_strategy == "step_by_step":
+    if strategy == "step_by_step":
         return (
             "Solve the problem step by step.\n"
             "Show your reasoning clearly.\n"
@@ -67,7 +78,7 @@ def build_strategy_prompt(cfg: JarvisConfig, user_request: str) -> str:
             f"{user_request}"
         )
 
-    if cfg.solution_strategy == "expert_panel":
+    if strategy == "expert_panel":
         return (
             "You are a panel of three experts:\n"
             "  - Expert 1 (Analyst): analyse the problem thoroughly.\n"
@@ -78,14 +89,13 @@ def build_strategy_prompt(cfg: JarvisConfig, user_request: str) -> str:
             f"{user_request}"
         )
 
-    # "direct" and "prompt_generation" stage-2 — no augmentation here
     return user_request
 
 
 def build_prompt_generation_request(user_request: str) -> str:
-    """Stage-1 prompt for the ``prompt_generation`` strategy.
+    """Stage-1 message for the ``prompt_generation`` strategy.
 
-    Asks the model to produce the best possible prompt for solving the task.
+    Asks the model to produce the most effective prompt for the task.
     """
     return (
         "Create the most effective prompt that would help an AI solve the "
@@ -95,11 +105,18 @@ def build_prompt_generation_request(user_request: str) -> str:
     )
 
 
-def build_final_prompt(cfg: JarvisConfig, original_request: str, clarifications: list[tuple[str, str]]) -> str:
-    """
-    Build the final user message that includes the original request and all
-    collected clarification Q&A pairs.
-    """
+def build_clarification_prompt(params: dict[str, Any], question_number: int) -> str:
+    """Return an instruction asking the model for one clarification question."""
+    total = params.get("clarification_questions", 0)
+    return (
+        f"Before answering, ask clarification question {question_number} of "
+        f"{total}. Ask only this single question now. "
+        "Do not answer the original request yet."
+    )
+
+
+def build_final_prompt(original_request: str, clarifications: list[tuple[str, str]]) -> str:
+    """Build the final user message, embedding any collected clarification Q&A."""
     if not clarifications:
         return original_request
 

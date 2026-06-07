@@ -6,16 +6,24 @@ No streaming. No function calling. One hardcoded model.
 """
 
 import os
-import requests
+from typing import Any, NamedTuple
 
-from ..config.schema import JarvisConfig
+import requests
 
 MODEL = "anthropic/claude-sonnet-4"
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 
+class Completion(NamedTuple):
+    """Result of a single OpenRouter call."""
+    text: str
+    finish_reason: str | None
+    request: dict   # exact payload sent to OpenRouter
+    response: dict  # full raw response JSON from OpenRouter
+
+
 class OpenRouterClient:
-    def __init__(self):
+    def __init__(self) -> None:
         self.api_key = self._load_api_key()
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -23,10 +31,12 @@ class OpenRouterClient:
     def complete(
         self,
         messages: list[dict],
-        cfg: JarvisConfig,
-    ) -> tuple[str, str | None]:
-        """Send messages and return (reply_text, finish_reason)."""
-        payload = self._build_payload(messages, cfg)
+        params: dict[str, Any],
+    ) -> Completion:
+        """Send messages and return a Completion with text, finish_reason,
+        and the exact request/response dicts for logging.
+        """
+        payload = self._build_payload(messages, params)
         response = requests.post(
             API_URL,
             headers=self._headers(),
@@ -35,32 +45,32 @@ class OpenRouterClient:
         )
         self._raise_for_status(response)
         data = response.json()
-        return self._extract_text(data), self._extract_finish_reason(data)
+        return Completion(
+            text=self._extract_text(data),
+            finish_reason=self._extract_finish_reason(data),
+            request=payload,
+            response=data,
+        )
 
     # ── Internals ─────────────────────────────────────────────────────────────
 
-    def _build_payload(self, messages: list[dict], cfg: JarvisConfig) -> dict:
-        use_api_controls = cfg.control_mode in ("api", "both")
+    def _build_payload(self, messages: list[dict], params: dict[str, Any]) -> dict:
+        """Build the OpenRouter request dict.
 
-        payload: dict = {
-            "model": MODEL,
-            "messages": messages,
-        }
+        Exactly the fields present in *params* are considered; nothing else can
+        leak into the payload regardless of any global or persisted state.
+        """
+        payload: dict = {"model": MODEL, "messages": messages}
 
-        if use_api_controls:
-            payload["temperature"] = cfg.temperature
-            payload["top_p"] = cfg.top_p
-            payload["max_tokens"] = cfg.max_tokens
+        # Scalar sampling params — included when present in the runtime config
+        # (either from the mode's preset defaults or user overrides).
+        for field in ("temperature", "top_p", "max_tokens", "top_k", "seed"):
+            if field in params and params[field] is not None:
+                payload[field] = params[field]
 
-            # top_k and seed are not standard OpenAI params but OpenRouter
-            # passes them through to Anthropic models.
-            if cfg.top_k is not None:
-                payload["top_k"] = cfg.top_k
-            if cfg.seed is not None:
-                payload["seed"] = cfg.seed
-
-            if cfg.api_stop_enabled:
-                payload["stop"] = [cfg.stop_sequence]
+        # Stop sequence — sent when api_stop_enabled is true.
+        if params.get("api_stop_enabled") and "stop_sequence" in params:
+            payload["stop"] = [params["stop_sequence"]]
 
         return payload
 
