@@ -1,0 +1,5 @@
+{
+  "name": "basic",
+  "description": "Minimal API integration — only model and messages are sent.",
+  "params": {}
+}

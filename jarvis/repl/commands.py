@@ -14,52 +14,91 @@ Jarvis — interactive LLM assistant
 Commands
 ────────
   help                    Show this help message
-  config show             Show current configuration
-  config set <key> <val>  Change a configuration value
-  config update <k=v> …   Update multiple values in one command
-  config reset            Reset all settings to defaults
+  mode                    Show available modes and which is active
+  mode <name>             Switch to an assignment mode (replaces config entirely)
+  config show             Show active mode and its current parameters
+  config set <key> <val>  Change a parameter (key must exist in the active mode)
+  config update <k=v> …   Change multiple parameters at once
+  config reset            Restore the active mode's preset defaults
   session results         Show all interactions from this session
   exit / quit             Exit Jarvis
 
-Asking questions
+Assignment modes
 ────────────────
-  Just type any question or request and press Enter.
-  Jarvis will answer using the current configuration.
+  basic            Only model + messages are sent (no extra parameters)
+  response_control Response format, length, and stop sequence experiments
+  prompting        Prompting strategy experiments
+  temperature      Temperature-only experiments
 
-Configuration keys
-──────────────────
-  temperature             Sampling temperature (0.0 – 2.0)
-  top_p                   Nucleus sampling probability (0.0 – 1.0)
-  top_k                   Top-k sampling
-  max_tokens              Maximum tokens in the response
-  seed                    Random seed (use 'none' to disable)
+Parameters per mode
+───────────────────
+  basic            (none)
 
-  response_format         plain | bullet_list | numbered_list
-  max_words               Maximum words in the response (prompt-level)
+  temperature
+    temperature    Sampling temperature (0.0 – 2.0)
 
-  clarification_questions Number of clarification questions before answering
+  response_control
+    max_tokens           Maximum tokens in the response
+    response_format      plain | bullet_list | numbered_list
+    max_words            Maximum words in the response (prompt-level)
+    prompt_stop_enabled  true | false — inject stop marker in system prompt
+    api_stop_enabled     true | false — send stop sequence to API
+    stop_sequence        The stop string (default: ###END###)
 
-  prompt_stop_enabled     true | false — inject stop marker in prompt
-  api_stop_enabled        true | false — send stop sequence to API
-  stop_sequence           The stop string (default: ###END###)
+  prompting
+    solution_strategy    direct | step_by_step | prompt_generation | expert_panel
 
-  control_mode            prompt | api | both
+Complete parameter reference
+───────────────────────────
+The following parameters exist in the system.  Each is available only when
+the active mode's preset includes it.  They are listed here for reference
+independent of any specific mode.
 
-  solution_strategy       Prompting strategy for the answer:
-                            direct          — send request as-is (default)
-                            step_by_step    — ask for explicit reasoning steps
-                            prompt_generation — two-stage: generate a prompt,
-                                              then use it to answer
-                            expert_panel    — three-expert perspective + synthesis
+  Sampling (sent to OpenRouter API)
+    temperature    float  0.0 – 2.0   Sampling temperature
+    top_p          float  0.0 – 1.0   Nucleus sampling probability
+    top_k          int                Top-k sampling cutoff
+    max_tokens     int                Maximum tokens in the response
+    seed           int | none         Random seed for reproducibility
+
+  Stop sequences
+    api_stop_enabled    bool    Send stop sequence to OpenRouter API
+    prompt_stop_enabled bool    Inject stop marker into system prompt
+    stop_sequence       str     The stop string (default: ###END###)
+
+  Response formatting (prompt-level)
+    response_format  plain | bullet_list | numbered_list
+    max_words        int   Maximum words in the response
+
+  Prompting strategies
+    solution_strategy  direct | step_by_step | prompt_generation | expert_panel
+
+  Clarification loop
+    clarification_questions  int  (default: 0)
+
+      Controls how many clarification rounds the model is allowed before
+      giving its final answer.
+
+        0   — no clarification loop; model answers immediately (default)
+        1+  — model asks one clarification question per round, waits for
+               the user's answer, then proceeds to the next round or final answer
+
+      Important: this does NOT guarantee the model will ask questions.
+      It only limits how many clarification iterations are allowed.
+      Each round produces a separate logged OpenRouter call visible in
+      'session results'.
 
 Examples
 ────────
-  config set temperature 0.8
-  config set solution_strategy step_by_step
-  config update response_format=bullet_list max_words=50 solution_strategy=expert_panel
-  config set clarification_questions 2
-  config set control_mode prompt
-  config set prompt_stop_enabled true
+  mode basic
+  mode temperature
+  config set temperature 1.2
+  mode response_control
+  config set response_format bullet_list
+  config update max_words=50 api_stop_enabled=true
+  mode prompting
+  config set solution_strategy expert_panel
+  config reset
 """
 
 
@@ -83,11 +122,6 @@ def handle_config_set(args: list[str], config_manager: ConfigManager) -> str:
         return f"Error: {exc}"
 
 
-def handle_config_reset(config_manager: ConfigManager) -> str:
-    config_manager.reset()
-    return "Configuration reset to defaults."
-
-
 def handle_config_update(args: list[str], config_manager: ConfigManager) -> str:
     if not args:
         return "Usage: config update <key=value> [<key=value> ...]"
@@ -95,6 +129,22 @@ def handle_config_update(args: list[str], config_manager: ConfigManager) -> str:
         result = config_manager.update(args)
         return f"Updated:\n{result}"
     except (ValueError, TypeError) as exc:
+        return f"Error: {exc}"
+
+
+def handle_config_reset(config_manager: ConfigManager) -> str:
+    config_manager.reset()
+    return f"Configuration reset to '{config_manager.active_mode}' preset defaults."
+
+
+def handle_mode_show(config_manager: ConfigManager) -> str:
+    return config_manager.show_modes()
+
+
+def handle_mode_set(name: str, config_manager: ConfigManager) -> str:
+    try:
+        return config_manager.set_mode(name)
+    except ValueError as exc:
         return f"Error: {exc}"
 
 

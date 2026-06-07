@@ -1,0 +1,7 @@
+{
+  "name": "prompting",
+  "description": "Prompting strategy experiments — direct, step-by-step, prompt generation, expert panel.",
+  "params": {
+    "solution_strategy": "direct"
+  }
+}
