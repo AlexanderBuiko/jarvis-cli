@@ -1,7 +1,8 @@
 {
   "name": "prompting",
-  "description": "Prompting strategy experiments — direct, step-by-step, prompt generation, expert panel.",
+  "description": "Prompting strategy experiments \u2014 direct, step-by-step, prompt generation, expert panel.",
   "params": {
+    "model": "anthropic/claude-sonnet-4",
     "solution_strategy": "direct"
   }
 }
