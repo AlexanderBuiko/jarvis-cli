@@ -20,7 +20,9 @@ Commands
   config set <key> <val>  Change a parameter (key must exist in the active mode)
   config update <k=v> …   Change multiple parameters at once
   config reset            Restore the active mode's preset defaults
-  session results         Show all interactions from this session
+  session results         Show all interactions from this session (default view)
+  session results --api   Show API request/response payloads
+  session results --benchmark  Show API payloads + benchmark metrics
   exit / quit             Exit Jarvis
 
 Assignment modes
@@ -53,6 +55,9 @@ Complete parameter reference
 The following parameters exist in the system.  Each is available only when
 the active mode's preset includes it.  They are listed here for reference
 independent of any specific mode.
+
+  Model selection
+    model          str                OpenRouter model identifier (e.g. anthropic/claude-sonnet-4)
 
   Sampling (sent to OpenRouter API)
     temperature    float  0.0 – 2.0   Sampling temperature
@@ -148,5 +153,13 @@ def handle_mode_set(name: str, config_manager: ConfigManager) -> str:
         return f"Error: {exc}"
 
 
-def handle_session_results(session_store: SessionStore) -> str:
-    return session_store.format_results()
+def handle_session_results(
+    session_store: SessionStore,
+    flags: set[str] | None = None,
+) -> str:
+    flags = flags or set()
+    if "--benchmark" in flags:
+        return session_store.format_results(mode="benchmark")
+    if "--api" in flags:
+        return session_store.format_results(mode="api")
+    return session_store.format_results(mode="default")

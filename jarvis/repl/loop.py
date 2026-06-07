@@ -19,7 +19,7 @@ from .commands import (
     handle_session_results,
 )
 from ..config.manager import ConfigManager
-from ..openrouter.client import OpenRouterClient, Completion
+from ..openrouter.client import OpenRouterClient, Completion, DEFAULT_MODEL
 from ..prompt_builder.builder import (
     build_system_prompt,
     build_clarification_prompt,
@@ -94,8 +94,9 @@ def _dispatch(
 
     if cmd == "session":
         if args and args[0].lower() == "results":
-            return handle_session_results(session_store)
-        return "Usage: session results"
+            flags = set(args[1:])
+            return handle_session_results(session_store, flags)
+        return "Usage: session results [--api | --benchmark]"
 
     return _handle_llm_request(raw, config_manager, client, session_store)
 
@@ -137,6 +138,7 @@ def _handle_llm_request(
             index=len(api_calls) + 1,
             label=f"clarification_round_{q_num}_of_{total_clarifications}",
             completion=c,
+            client=client,
         ))
 
         print(f"\nA: {c.text.strip()}\n")
@@ -160,8 +162,10 @@ def _handle_llm_request(
             clarifications=[],
             extra_instruction=None,
         )
+        # Pass model so the configured model is used even with empty API params.
+        stage1_params = {"model": params["model"]} if "model" in params else {}
         try:
-            stage1 = client.complete(stage1_messages, {})
+            stage1 = client.complete(stage1_messages, stage1_params)
         except Exception as exc:
             return f"API error (prompt generation stage): {exc}"
 
@@ -170,6 +174,7 @@ def _handle_llm_request(
             index=len(api_calls) + 1,
             label="prompt_generation_stage1",
             completion=stage1,
+            client=client,
         ))
         final_user_message = generated_prompt
     else:
@@ -191,6 +196,7 @@ def _handle_llm_request(
         index=len(api_calls) + 1,
         label="final_answer",
         completion=completion,
+        client=client,
     ))
 
     display_response = completion.text.strip()
@@ -214,10 +220,47 @@ def _handle_llm_request(
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _make_call_record(index: int, label: str, completion: Completion) -> dict:
-    """Build one entry for the api_calls trace list."""
+def _make_call_record(
+    index: int,
+    label: str,
+    completion: Completion,
+    client: "OpenRouterClient",
+) -> dict:
+    """Build one entry for the api_calls trace list, including benchmark metrics."""
     raw_resp = completion.response
-    choice = raw_resp.get("choices", [{}])[0] if raw_resp else {}
+    # requested_model: what we explicitly sent to OpenRouter.
+    # actual_model: what OpenRouter reports in the response (may be a versioned
+    #   variant such as "qwen/qwen3-32b-04-28" for a request of "qwen/qwen3-32b").
+    requested_model: str = completion.request.get("model") or DEFAULT_MODEL
+    actual_model: str = raw_resp.get("model") or requested_model
+
+    usage = raw_resp.get("usage") or {}
+    prompt_tokens: int | None = usage.get("prompt_tokens")
+    completion_tokens: int | None = usage.get("completion_tokens")
+    total_tokens: int | None = usage.get("total_tokens")
+
+    # Pricing priority: requested_model first (canonical, present in the catalog),
+    # fall back to actual_model only if the requested identifier has no entry.
+    input_per_m, output_per_m = client.get_pricing(requested_model)
+    if input_per_m is None and actual_model != requested_model:
+        input_per_m, output_per_m = client.get_pricing(actual_model)
+
+    if prompt_tokens is not None and input_per_m is not None:
+        input_cost_usd: float | None = (prompt_tokens / 1_000_000) * input_per_m
+    else:
+        input_cost_usd = None
+
+    if completion_tokens is not None and output_per_m is not None:
+        output_cost_usd: float | None = (completion_tokens / 1_000_000) * output_per_m
+    else:
+        output_cost_usd = None
+
+    total_cost_usd: float | None = (
+        input_cost_usd + output_cost_usd
+        if input_cost_usd is not None and output_cost_usd is not None
+        else None
+    )
+
     return {
         "index": index,
         "label": label,
@@ -225,9 +268,21 @@ def _make_call_record(index: int, label: str, completion: Completion) -> dict:
         "response": {
             "content": completion.text,
             "finish_reason": completion.finish_reason,
-            "usage": raw_resp.get("usage"),
-            "model": raw_resp.get("model"),
+            "usage": usage or None,
+            "model": actual_model,
             "id": raw_resp.get("id"),
+        },
+        "benchmark": {
+            "requested_model": requested_model,
+            "actual_model": actual_model,
+            "latency_ms": round(completion.latency_ms, 2),
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "input_cost_usd": input_cost_usd,
+            "output_cost_usd": output_cost_usd,
+            "total_cost_usd": total_cost_usd,
+            "finish_reason": completion.finish_reason,
         },
     }
 

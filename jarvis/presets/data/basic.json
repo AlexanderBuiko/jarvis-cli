@@ -1,5 +1,7 @@
 {
   "name": "basic",
-  "description": "Minimal API integration — only model and messages are sent.",
-  "params": {}
+  "description": "Minimal API integration \u2014 only model and messages are sent.",
+  "params": {
+    "model": "anthropic/claude-sonnet-4"
+  }
 }

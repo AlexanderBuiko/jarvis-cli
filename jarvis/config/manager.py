@@ -19,6 +19,7 @@ def _parse_bool(raw: str) -> bool:
 # mode presets have NO say in what is a valid parameter to set.
 
 _PARAM_PARSERS: dict[str, Any] = {
+    "model":                  str,
     "temperature":            float,
     "top_p":                  float,
     "top_k":                  int,
