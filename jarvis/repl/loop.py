@@ -1,9 +1,11 @@
 """
 REPL loop.
 
-Reads user input, dispatches built-in commands, and forwards everything
-else to JarvisAgent. All conversation and LLM logic lives in the agent;
-this module is pure UI.
+Reads user input via InputController and routes it by input type:
+  "prompt"  → message forwarded to JarvisAgent
+  "command" → text dispatched to command handlers
+
+All conversation and LLM logic lives in the agent; this module is pure UI.
 """
 
 import sys
@@ -20,27 +22,32 @@ from .commands import (
     handle_session_summary,
     handle_session_api,
 )
+from .input import InputController
 from ..agent import JarvisAgent
 from ..config.manager import ConfigManager
-
-PROMPT = "jarvis> "
 
 
 def run_repl(agent: JarvisAgent, config_manager: ConfigManager) -> None:
     print(_banner())
-    print("Type 'help' for available commands.\n")
+    print("Starts in prompt mode (>). Type ! on an empty line to switch modes.\n")
+
+    controller = InputController()
 
     while True:
         try:
-            raw = input(PROMPT).strip()
-        except (EOFError, KeyboardInterrupt):
+            input_type, raw = controller.read_input()
+        except EOFError:
             print("\nGoodbye.")
             sys.exit(0)
 
-        if not raw:
-            continue
+        if input_type == "command":
+            output = _dispatch(raw, agent, config_manager)
+        else:
+            try:
+                output = f"A: {agent.chat(raw)}"
+            except Exception as exc:
+                output = f"Error: {exc}"
 
-        output = _dispatch(raw, agent, config_manager)
         if output:
             print(output)
             print()
@@ -55,6 +62,8 @@ def _dispatch(
     config_manager: ConfigManager,
 ) -> str:
     tokens = raw.split()
+    if not tokens:
+        return ""
     cmd = tokens[0].lower()
     args = tokens[1:]
 
@@ -97,11 +106,7 @@ def _dispatch(
                 return handle_session_api(agent.session)
         return "Usage: session chat | session summary | session api"
 
-    # Anything else is a message to the agent.
-    try:
-        return f"A: {agent.chat(raw)}"
-    except Exception as exc:
-        return f"Error: {exc}"
+    return f"Unknown command: '{cmd}'. Type 'help' for available commands."
 
 
 # ── Banner ────────────────────────────────────────────────────────────────────
