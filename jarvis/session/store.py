@@ -6,7 +6,7 @@ launches — each session starts clean.
 
 Three views are available:
   format_chat()    — clean conversation transcript (primary view)
-  format_summary() — aggregate statistics: message counts, tokens, model, config
+  format_summary() — per-model aggregates: tokens, cost, latency, call counts
   format_api()     — full API request/response payloads with per-call metrics
 """
 
@@ -86,78 +86,56 @@ class SessionStore:
         return "\n".join(lines)
 
     def format_summary(self) -> str:
-        """Aggregate session statistics.
+        """Aggregate session statistics grouped by model.
 
-        Covers: message counts, model(s) used, active configuration,
-        total token usage, and total API call count.
+        Shows conversation turn count, then a per-model block with token usage,
+        cost, average latency, and API call count for each model used.
         """
         if not self._entries:
             return "No conversation recorded in this session yet."
 
-        # ── Message counts ────────────────────────────────────────────────────
-        turn_count = len(self._entries)
-
-        # ── Models used ──────────────────────────────────────────────────────
-        # Collect distinct model identifiers from API response fields,
-        # preserving the order they first appeared.
-        models: list[str] = []
+        # ── Collect all calls grouped by model ────────────────────────────────
+        # Preserves the order models were first seen.
+        by_model: dict[str, list[dict]] = {}
         for entry in self._entries:
             for call in entry.api_calls:
-                m = (
+                model = (
                     call["response"].get("model")
                     or entry.config_snapshot.get("model")
                     or DEFAULT_MODEL
                 )
-                if m not in models:
-                    models.append(m)
+                by_model.setdefault(model, []).append(call)
 
-        # ── Configuration ─────────────────────────────────────────────────────
-        first_config = self._entries[0].config_snapshot
-        last_config = self._entries[-1].config_snapshot
-        config_changed = first_config != last_config
-
-        # ── Token usage (null-safe sum across all API calls) ──────────────────
-        pt = _aggregate(self._entries, "prompt_tokens")
-        ct = _aggregate(self._entries, "completion_tokens")
-        tt = _aggregate(self._entries, "total_tokens")
-
-        # ── API call count ────────────────────────────────────────────────────
-        total_calls = sum(len(e.api_calls) for e in self._entries)
+        total_calls = sum(len(calls) for calls in by_model.values())
 
         lines = ["Session Summary", SEP, ""]
 
         lines += [
-            "Messages",
-            f"  User:       {turn_count}",
-            f"  Assistant:  {turn_count}",
+            "Conversation",
+            f"  User messages:      {len(self._entries)}",
+            f"  Assistant messages: {len(self._entries)}",
+            f"  API calls:          {total_calls}",
             "",
         ]
 
-        lines += ["Model"]
-        for m in models:
-            lines.append(f"  {m}")
-        lines.append("")
+        for model, calls in by_model.items():
+            lines += [SEP, f"Model: {model}", SEP, ""]
 
-        lines += ["Configuration"]
-        if first_config:
-            for k, v in first_config.items():
-                lines.append(f"  {k} = {v}")
-            if config_changed:
-                lines.append("  (changed during session — see: session chat)")
-        else:
-            lines.append("  (none — API defaults)")
-        lines.append("")
+            pt = _sum_field(calls, "prompt_tokens")
+            ct = _sum_field(calls, "completion_tokens")
+            tt = _sum_field(calls, "total_tokens")
+            cost = _sum_cost(calls)
+            avg_latency = _avg_latency(calls)
 
-        lines += [
-            "Usage",
-            f"  Prompt tokens:     {_fmt_int(pt)}",
-            f"  Completion tokens: {_fmt_int(ct)}",
-            f"  Total tokens:      {_fmt_int(tt)}",
-            "",
-            "API Calls",
-            f"  {total_calls}",
-            "",
-        ]
+            lines += [
+                f"  Prompt tokens:     {_fmt_int_grouped(pt)}",
+                f"  Completion tokens: {_fmt_int_grouped(ct)}",
+                f"  Total tokens:      {_fmt_int_grouped(tt)}",
+                f"  Total cost:        {_fmt_usd(cost)}",
+                f"  Avg latency:       {_fmt_latency(avg_latency)}",
+                f"  API calls:         {len(calls)}",
+                "",
+            ]
 
         return "\n".join(lines)
 
@@ -186,6 +164,7 @@ class SessionStore:
                 )
                 latency = call.get("latency_ms")
 
+                call_cost = call.get("cost") or {}
                 lines += [
                     f"API Call #{global_call_num}  —  {call['label']}",
                     SEP,
@@ -200,6 +179,11 @@ class SessionStore:
                     f"  prompt:     {_fmt_int(usage.get('prompt_tokens'))}",
                     f"  completion: {_fmt_int(usage.get('completion_tokens'))}",
                     f"  total:      {_fmt_int(usage.get('total_tokens'))}",
+                    "",
+                    "Cost",
+                    f"  input:  {_fmt_usd(call_cost.get('input_usd'))}",
+                    f"  output: {_fmt_usd(call_cost.get('output_usd'))}",
+                    f"  total:  {_fmt_usd(call_cost.get('total_usd'))}",
                     "",
                     f"Finish reason:  {resp.get('finish_reason') or 'N/A'}",
                     "",
@@ -242,22 +226,53 @@ def _fmt_config_change(changes: dict[str, tuple[Any, Any]]) -> list[str]:
     return lines
 
 
-def _aggregate(entries: list[SessionEntry], token_field: str) -> int | None:
-    """Sum a token field across all API calls. Returns None if no data is available."""
+def _sum_field(calls: list[dict], token_field: str) -> int | None:
+    """Sum a token field across a list of call records. Returns None if no data."""
     total = 0
     found = False
-    for entry in entries:
-        for call in entry.api_calls:
-            v = (call["response"].get("usage") or {}).get(token_field)
-            if v is not None:
-                total += v
-                found = True
+    for call in calls:
+        v = (call["response"].get("usage") or {}).get(token_field)
+        if v is not None:
+            total += v
+            found = True
     return total if found else None
+
+
+def _sum_cost(calls: list[dict]) -> float | None:
+    """Sum total_usd across a list of call records. Returns None if no data."""
+    total = 0.0
+    found = False
+    for call in calls:
+        v = (call.get("cost") or {}).get("total_usd")
+        if v is not None:
+            total += v
+            found = True
+    return total if found else None
+
+
+def _avg_latency(calls: list[dict]) -> float | None:
+    """Return the mean latency_ms across a list of call records."""
+    values = [c["latency_ms"] for c in calls if c.get("latency_ms") is not None]
+    return sum(values) / len(values) if values else None
 
 
 def _fmt_int(v: Any) -> str:
     return "N/A" if v is None else str(v)
 
 
+def _fmt_int_grouped(v: Any) -> str:
+    """Format an integer with thousands separators."""
+    return "N/A" if v is None else f"{v:,}"
+
+
+def _fmt_usd(v: Any) -> str:
+    return "N/A" if v is None else f"${v:.6f}"
+
+
 def _fmt_ms(v: Any) -> str:
     return "N/A" if v is None else f"{round(v)} ms"
+
+
+def _fmt_latency(v: Any) -> str:
+    """Format latency in seconds with two decimal places."""
+    return "N/A" if v is None else f"{v / 1000:.2f} s"

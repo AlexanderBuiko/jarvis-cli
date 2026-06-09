@@ -3,6 +3,10 @@ OpenRouter HTTP client.
 
 Sends chat completion requests and returns the response text, finish reason,
 latency, and the exact request/response payloads for logging and inspection.
+
+Pricing data is fetched once from the OpenRouter model catalog on first use
+and cached for the lifetime of the client. Cost fields degrade to None
+silently if the catalog is unavailable.
 """
 
 import os
@@ -13,6 +17,7 @@ import requests
 
 DEFAULT_MODEL = "anthropic/claude-sonnet-4"
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
+MODELS_URL = "https://openrouter.ai/api/v1/models"
 
 
 class Completion(NamedTuple):
@@ -27,6 +32,8 @@ class Completion(NamedTuple):
 class OpenRouterClient:
     def __init__(self) -> None:
         self.api_key = self._load_api_key()
+        self._pricing_cache: dict[str, tuple[float | None, float | None]] = {}
+        self._pricing_fetched = False
 
     def complete(
         self,
@@ -53,6 +60,18 @@ class OpenRouterClient:
             latency_ms=latency_ms,
         )
 
+    def get_pricing(
+        self, model_id: str
+    ) -> tuple[float | None, float | None]:
+        """Return (input_$/M_tokens, output_$/M_tokens) for a model.
+
+        Returns (None, None) if pricing is unavailable. Pricing data is
+        fetched once and cached for the lifetime of this client instance.
+        """
+        if not self._pricing_fetched:
+            self._fetch_pricing()
+        return self._pricing_cache.get(model_id, (None, None))
+
     def _build_payload(self, messages: list[dict], params: dict[str, Any]) -> dict:
         model = params.get("model") or DEFAULT_MODEL
         payload: dict = {
@@ -66,6 +85,32 @@ class OpenRouterClient:
             if field in params and params[field] is not None:
                 payload[field] = params[field]
         return payload
+
+    def _fetch_pricing(self) -> None:
+        """Fetch model pricing from the OpenRouter catalog and populate the cache.
+
+        Pricing values in the API response are dollars per token; stored values
+        are dollars per million tokens for use in cost formulas.
+        Failures are caught silently — cost fields will show N/A for this session.
+        """
+        try:
+            response = requests.get(MODELS_URL, headers=self._headers(), timeout=10)
+            if response.status_code == 200:
+                for model in response.json().get("data", []):
+                    model_id = model.get("id")
+                    if not model_id:
+                        continue
+                    pricing = model.get("pricing", {})
+                    try:
+                        input_per_m = float(pricing["prompt"]) * 1_000_000
+                        output_per_m = float(pricing["completion"]) * 1_000_000
+                        self._pricing_cache[model_id] = (input_per_m, output_per_m)
+                    except (KeyError, ValueError, TypeError):
+                        self._pricing_cache[model_id] = (None, None)
+        except Exception:
+            pass  # pricing unavailable; costs will be stored as None
+        finally:
+            self._pricing_fetched = True
 
     def _headers(self) -> dict:
         return {

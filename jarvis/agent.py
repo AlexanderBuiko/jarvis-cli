@@ -6,7 +6,7 @@ The REPL and any other interface interact with Jarvis exclusively through this c
 """
 
 from .config.manager import ConfigManager
-from .openrouter.client import OpenRouterClient, Completion
+from .openrouter.client import DEFAULT_MODEL, OpenRouterClient, Completion
 from .prompt_builder.builder import (
     build_system_prompt,
     build_strategy_prompt,
@@ -53,7 +53,7 @@ class JarvisAgent:
             stage1_params = {"model": params["model"]} if "model" in params else {}
             stage1 = self._client.complete(stage1_messages, stage1_params)
             generated_prompt = stage1.text.strip()
-            api_calls.append(_make_call_record(1, "prompt_generation_stage1", stage1))
+            api_calls.append(_make_call_record(1, "prompt_generation_stage1", stage1, self._client))
             final_user_message = generated_prompt
         else:
             final_user_message = build_strategy_prompt(params, user_input)
@@ -69,7 +69,7 @@ class JarvisAgent:
 
         completion = self._client.complete(messages, params)
         response_text = completion.text.strip()
-        api_calls.append(_make_call_record(len(api_calls) + 1, "final_answer", completion))
+        api_calls.append(_make_call_record(len(api_calls) + 1, "final_answer", completion, self._client))
 
         self._history.append({"role": "user", "content": user_input})
         self._history.append({"role": "assistant", "content": response_text})
@@ -102,9 +102,49 @@ class JarvisAgent:
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _make_call_record(index: int, label: str, completion: Completion) -> dict:
-    """Build a single API call record for the session log."""
+def _make_call_record(
+    index: int,
+    label: str,
+    completion: Completion,
+    client: "OpenRouterClient",
+) -> dict:
+    """Build a single API call record for the session log.
+
+    Cost is computed here using the client's cached pricing data so that each
+    record is self-contained. If pricing is unavailable all cost fields are None.
+    """
     raw = completion.response
+    usage = raw.get("usage") or {}
+
+    # Pricing lookup uses the requested model ID (canonical, present in the
+    # catalog). Falls back to the actual model reported in the response, which
+    # may be a versioned variant (e.g. "qwen/qwen3-32b-04-28").
+    requested_model: str = completion.request.get("model") or DEFAULT_MODEL
+    actual_model: str = raw.get("model") or requested_model
+
+    input_per_m, output_per_m = client.get_pricing(requested_model)
+    if input_per_m is None and actual_model != requested_model:
+        input_per_m, output_per_m = client.get_pricing(actual_model)
+
+    prompt_tokens: int | None = usage.get("prompt_tokens")
+    completion_tokens: int | None = usage.get("completion_tokens")
+
+    input_cost: float | None = (
+        (prompt_tokens / 1_000_000) * input_per_m
+        if prompt_tokens is not None and input_per_m is not None
+        else None
+    )
+    output_cost: float | None = (
+        (completion_tokens / 1_000_000) * output_per_m
+        if completion_tokens is not None and output_per_m is not None
+        else None
+    )
+    total_cost: float | None = (
+        input_cost + output_cost
+        if input_cost is not None and output_cost is not None
+        else None
+    )
+
     return {
         "index": index,
         "label": label,
@@ -113,8 +153,13 @@ def _make_call_record(index: int, label: str, completion: Completion) -> dict:
         "response": {
             "content": completion.text,
             "finish_reason": completion.finish_reason,
-            "usage": raw.get("usage"),
-            "model": raw.get("model"),
+            "usage": usage or None,
+            "model": actual_model,
             "id": raw.get("id"),
+        },
+        "cost": {
+            "input_usd": input_cost,
+            "output_usd": output_cost,
+            "total_usd": total_cost,
         },
     }
