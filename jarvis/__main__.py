@@ -1,11 +1,12 @@
 """
 Entry point: python -m jarvis
-Also exposed as the 'jarvis' console script via pyproject.toml / setup.cfg.
+Also exposed as the 'jarvis' console script via setup.cfg.
 """
 
 import sys
 from .config.manager import ConfigManager
 from .openrouter.client import OpenRouterClient
+from .agent import JarvisAgent
 from .repl.loop import run_repl
 
 
@@ -17,7 +18,8 @@ def main() -> None:
         print(f"\n{exc}\n", file=sys.stderr)
         sys.exit(1)
 
-    run_repl(config_manager, client)
+    agent = JarvisAgent(client, config_manager)
+    run_repl(agent, config_manager)
 
 
 if __name__ == "__main__":

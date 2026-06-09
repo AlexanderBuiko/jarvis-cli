@@ -1,44 +1,39 @@
 """
-OpenRouter client.
+OpenRouter HTTP client.
 
-Sends chat completion requests to OpenRouter using the requests library.
-No streaming. No function calling. Model is configurable via params.
+Sends chat completion requests and returns the response text, finish reason,
+latency, and the exact request/response payloads for logging and inspection.
 """
 
-import time
 import os
+import time
 from typing import Any, NamedTuple
 
 import requests
 
 DEFAULT_MODEL = "anthropic/claude-sonnet-4"
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
-MODELS_URL = "https://openrouter.ai/api/v1/models"
 
 
 class Completion(NamedTuple):
-    """Result of a single OpenRouter call."""
+    """Result of a single OpenRouter request."""
     text: str
     finish_reason: str | None
-    request: dict   # exact payload sent to OpenRouter
-    response: dict  # full raw response JSON from OpenRouter
-    latency_ms: float
+    request: dict        # exact payload sent to OpenRouter
+    response: dict       # full raw response JSON from OpenRouter
+    latency_ms: float    # wall-clock round-trip time in milliseconds
 
 
 class OpenRouterClient:
     def __init__(self) -> None:
         self.api_key = self._load_api_key()
-        self._pricing_cache: dict[str, tuple[float | None, float | None]] = {}
-        self._pricing_fetched = False
-
-    # ── Public API ────────────────────────────────────────────────────────────
 
     def complete(
         self,
         messages: list[dict],
         params: dict[str, Any],
     ) -> Completion:
-        """Send messages and return a Completion including latency_ms."""
+        """Send messages and return a Completion with the full request and response."""
         payload = self._build_payload(messages, params)
         t0 = time.perf_counter()
         response = requests.post(
@@ -58,74 +53,19 @@ class OpenRouterClient:
             latency_ms=latency_ms,
         )
 
-    def get_pricing(
-        self, model_id: str
-    ) -> tuple[float | None, float | None]:
-        """Return (input_price_per_million_usd, output_price_per_million_usd).
-
-        Returns (None, None) if pricing is unavailable for the given model.
-        Pricing data is fetched once and cached for the lifetime of this client.
-        """
-        if not self._pricing_fetched:
-            self._fetch_pricing()
-        return self._pricing_cache.get(model_id, (None, None))
-
-    # ── Internals ─────────────────────────────────────────────────────────────
-
     def _build_payload(self, messages: list[dict], params: dict[str, Any]) -> dict:
-        """Build the OpenRouter request dict.
-
-        Exactly the fields present in *params* are considered; nothing else can
-        leak into the payload regardless of any global or persisted state.
-        """
         model = params.get("model") or DEFAULT_MODEL
         payload: dict = {
             "model": model,
             "messages": messages,
-            # Disable automatic fallback to a different model or provider.
-            # If the requested model is unavailable, OpenRouter returns an error
-            # instead of silently routing the request elsewhere.  This is required
-            # for benchmark accuracy: recorded model, latency, and cost must
-            # correspond exactly to the model that was requested.
+            # Disable automatic fallback so the recorded model always matches
+            # the requested model.
             "provider": {"allow_fallbacks": False},
         }
-
-        # Scalar sampling params — included when present in the runtime config
-        # (either from the mode's preset defaults or user overrides).
         for field in ("temperature", "top_p", "max_tokens", "top_k", "seed"):
             if field in params and params[field] is not None:
                 payload[field] = params[field]
-
-        # Stop sequence — sent when api_stop_enabled is true.
-        if params.get("api_stop_enabled") and "stop_sequence" in params:
-            payload["stop"] = [params["stop_sequence"]]
-
         return payload
-
-    def _fetch_pricing(self) -> None:
-        """Fetch model pricing from OpenRouter and populate the cache.
-
-        Pricing values in the API response are dollars per token; we store
-        them as dollars per million tokens for readability in cost formulas.
-        """
-        try:
-            response = requests.get(MODELS_URL, headers=self._headers(), timeout=10)
-            if response.status_code == 200:
-                for model in response.json().get("data", []):
-                    model_id = model.get("id")
-                    if not model_id:
-                        continue
-                    pricing = model.get("pricing", {})
-                    try:
-                        input_per_m = float(pricing["prompt"]) * 1_000_000
-                        output_per_m = float(pricing["completion"]) * 1_000_000
-                        self._pricing_cache[model_id] = (input_per_m, output_per_m)
-                    except (KeyError, ValueError, TypeError):
-                        self._pricing_cache[model_id] = (None, None)
-        except Exception:
-            pass  # pricing unavailable; costs will be stored as null
-        finally:
-            self._pricing_fetched = True
 
     def _headers(self) -> dict:
         return {

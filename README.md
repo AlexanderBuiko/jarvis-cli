@@ -1,8 +1,6 @@
-# Jarvis — LLM Controls & Formatting Explorer
+# Jarvis — Conversational AI Agent
 
-An interactive REPL-based assistant that demonstrates how **prompt-level controls** and **API-level controls** affect LLM responses.
-
-Built as an educational project for experimenting with response formatting, length constraints, stop conditions, clarification questions, and model generation parameters.
+An interactive CLI agent that holds multi-turn conversations via the OpenRouter API.
 
 ---
 
@@ -40,119 +38,97 @@ python3 -m jarvis
 
 ---
 
-## REPL Commands
+## Commands
 
 | Command | Description |
 |---|---|
-| `help` | Show help |
-| `config show` | Show current configuration |
-| `config set <key> <value>` | Change a config value |
-| `config reset` | Reset all settings to defaults |
-| `session results` | Show all interactions from this session |
+| `help` | Show help and parameter reference |
+| `config show` | Show active configuration |
+| `config set <key> <value>` | Set a parameter |
+| `config update <k=v> …` | Set multiple parameters at once |
+| `config reset` | Clear all parameters (revert to API defaults) |
+| `history` | Show current conversation history |
+| `history clear` | Clear conversation history |
+| `session chat` | Show the full conversation transcript |
+| `session summary` | Show aggregate statistics (tokens, model, config) |
+| `session api` | Show raw API request/response payloads with per-call metrics |
 | `exit` / `quit` | Exit Jarvis |
 
-Any other input is sent to the LLM as a question.
+Any other input is sent to the agent as a message.
 
 ---
 
-## Configuration System
+## Configuration
 
-Jarvis uses **three configuration layers**, applied in order:
+Parameters are optional. When none are set, OpenRouter API defaults apply.
+Set only what you want to change.
 
-1. **Internal defaults** — built into the code  
-2. **Persisted user config** — stored in `~/.jarvis/config.json`  
-3. **Runtime overrides** — applied via `config set` during the session  
+| Parameter | Type | Description |
+|---|---|---|
+| `model` | str | OpenRouter model identifier. Default: `anthropic/claude-sonnet-4` |
+| `temperature` | float 0.0–2.0 | Sampling temperature |
+| `top_p` | float 0.0–1.0 | Nucleus sampling probability |
+| `top_k` | int | Top-k sampling cutoff |
+| `max_tokens` | int | Maximum tokens in the response |
+| `seed` | int \| none | Random seed for reproducibility |
+| `solution_strategy` | see below | Controls how the agent approaches the problem |
 
-All changes via `config set` are persisted automatically. You never edit the JSON file manually.
+### Solution strategies
+
+| Strategy | Behaviour |
+|---|---|
+| `direct` | Answer immediately (default) |
+| `step_by_step` | Reason through steps explicitly before answering |
+| `expert_panel` | Three-expert panel discussion with a synthesised final answer |
+| `prompt_generation` | Stage 1: generate an optimised prompt for the task. Stage 2: answer using it |
 
 ---
 
-## Configuration Reference
+## Conversation
 
-### Generation parameters (API-level)
+Jarvis maintains conversation history across turns. Each message you send includes all prior turns so the model retains full context.
 
-| Key | Default | Description |
-|---|---|---|
-| `temperature` | `0.2` | Sampling temperature (0.0 – 2.0) |
-| `top_p` | `0.9` | Nucleus sampling (0.0 – 1.0) |
-| `top_k` | `40` | Top-k sampling |
-| `max_tokens` | `200` | Maximum tokens in the response |
-| `seed` | `none` | Random seed for reproducibility |
+```
+jarvis> What is HTTP?
 
-### Prompt-level controls
+A: HTTP (HyperText Transfer Protocol) is the foundation of data
+   communication on the web...
 
-| Key | Default | Description |
-|---|---|---|
-| `response_format` | `plain` | `plain`, `bullet_list`, `numbered_list` |
-| `max_words` | `200` | Max words injected as a prompt instruction |
-| `clarification_questions` | `0` | Questions to ask before answering |
+jarvis> Can you explain the request/response cycle in more detail?
 
-### Stop controls
+A: Sure. When a client sends an HTTP request it includes...
 
-| Key | Default | Description |
-|---|---|---|
-| `prompt_stop_enabled` | `false` | Inject stop marker instruction in prompt |
-| `api_stop_enabled` | `false` | Send stop sequence to the API |
-| `stop_sequence` | `###END###` | The stop string used by both mechanisms |
+jarvis> history
 
-### Control mode
+Conversation history (2 turns)
+········································
+  [1] You   : What is HTTP?
+  [1] Jarvis: HTTP (HyperText Transfer Protocol) is...
+········································
+  [2] You   : Can you explain the request/response cycle in more detail?
+  [2] Jarvis: Sure. When a client sends an HTTP request...
+········································
 
-| Key | Default | Description |
-|---|---|---|
-| `control_mode` | `both` | `prompt`, `api`, or `both` |
-
-**`control_mode` explained:**
-- `prompt` — only prompt-level instructions are active (format, length, stop marker)
-- `api` — only API parameters are sent (temperature, max_tokens, stop, etc.)
-- `both` — both types of controls are active simultaneously
+jarvis> history clear
+Conversation history cleared.
+```
 
 ---
 
 ## Example Session
 
 ```
-jarvis> help
+jarvis> config set model anthropic/claude-haiku-3
+Updated: model = anthropic/claude-haiku-3
 
-jarvis> config show
+jarvis> config set solution_strategy step_by_step
+Updated: solution_strategy = step_by_step
 
-  temperature  =  0.2
-  top_p        =  0.9
-  max_tokens   =  200
-  ...
+jarvis> How does TLS handshake work?
 
-jarvis> config set response_format bullet_list
-Updated: response_format = bullet_list
+A: Step 1: The client sends a ClientHello...
 
-jarvis> config set clarification_questions 2
-Updated: clarification_questions = 2
-
-jarvis> Plan a trip to Japan
-
-A: Question 1 of 2: What is your total budget for the trip?
-
-jarvis> 2000 USD
-
-A: Question 2 of 2: How many days are you planning to travel?
-
-jarvis> 10
-
-A:
-• Budget: $2,000 for 10 days — feasible with budget accommodation
-• Flights: Book in advance, expect $800–$1,200 round-trip
-• Stay: Hostels or capsule hotels ~$30–50/night
-• Food: Street food and convenience stores keep costs low
-• Transport: Get an IC card; JR Pass may not be cost-effective at this length
-
-jarvis> config set clarification_questions 0
-Updated: clarification_questions = 0
-
-jarvis> config set temperature 1.2
-
-jarvis> Explain Docker
-
-A: ...
-
-jarvis> session results
+jarvis> session api
 
 ────────────────────────────────────────────────────────────
   Interaction #1
@@ -164,76 +140,22 @@ Goodbye.
 
 ---
 
-## How Controls Work
-
-### Prompt-level controls
-
-Injected as natural-language instructions inside the **system prompt**:
+## Architecture
 
 ```
-You are Jarvis, a helpful and concise assistant.
-Format your response as a bullet list.
-Keep your response to a maximum of 200 words.
-When you have finished your response, write exactly "###END###" on its own line.
+__main__.py           ← wires agent + REPL, starts the application
+agent.py              ← JarvisAgent: conversation history, request pipeline
+openrouter/
+  client.py           ← HTTP transport for OpenRouter API
+config/
+  manager.py          ← validated key-value configuration store
+prompt_builder/
+  builder.py          ← system prompt and strategy prompt construction
+repl/
+  loop.py             ← REPL loop: reads input, calls agent, prints output
+  commands.py         ← built-in command handlers
+session/
+  store.py            ← in-memory session log
 ```
 
-The model is *instructed* to follow these rules but is not technically prevented from violating them.
-
-### API-level controls
-
-Passed as parameters in the **API request body**:
-
-```json
-{
-  "model": "anthropic/claude-sonnet-4",
-  "temperature": 0.8,
-  "top_p": 0.9,
-  "max_tokens": 200,
-  "stop": ["###END###"]
-}
-```
-
-These are enforced by the model runtime — `max_tokens` and `stop` are hard limits.
-
-### Experimenting with the difference
-
-Try the same question under different `control_mode` settings:
-
-```
-config set control_mode prompt    → only instructions in prompt
-config set control_mode api       → only API parameters
-config set control_mode both      → both active
-```
-
-Then compare outputs with `session results`.
-
----
-
-## Project Structure
-
-```
-jarvis/
-├── __init__.py
-├── __main__.py          ← entry point
-├── config/
-│   ├── schema.py        ← JarvisConfig dataclass
-│   └── manager.py       ← three-layer config management + persistence
-├── openrouter/
-│   └── client.py        ← HTTP client for OpenRouter API
-├── prompt_builder/
-│   └── builder.py       ← dynamic prompt construction
-├── repl/
-│   ├── commands.py      ← built-in command handlers
-│   └── loop.py          ← REPL loop + LLM interaction flow
-└── session/
-    └── store.py         ← in-memory session history
-requirements.txt
-setup.cfg
-README.md
-```
-
----
-
-## Model
-
-Hardcoded to `anthropic/claude-sonnet-4` via OpenRouter. No tools, no function calling, no streaming.
+`JarvisAgent` is the central entity. The REPL is a thin UI layer that calls `agent.chat()` for every non-command input. Conversation history lives on the agent and is included in every API request automatically.

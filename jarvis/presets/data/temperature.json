@@ -1,8 +1,0 @@
-{
-  "name": "temperature",
-  "description": "Temperature experiments \u2014 only temperature is sent besides model and messages.",
-  "params": {
-    "model": "anthropic/claude-sonnet-4",
-    "temperature": 0.7
-  }
-}
