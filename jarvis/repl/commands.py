@@ -12,6 +12,15 @@ from ..session.store import SessionStore
 HELP_TEXT = """
 Jarvis — conversational AI agent
 
+Modes
+─────
+  >   Prompt mode  — input is sent to the agent
+  !   Command mode — input is dispatched to the REPL
+
+  Type ! on an empty line to toggle between modes.
+  History (↑/↓ on empty line)
+  Autocomplete (↑/↓/Tab in command mode when suggestions are visible)
+
 Commands
 ────────
   help                    Show this help message
@@ -20,7 +29,7 @@ Commands
   config update <k=v> …   Set multiple parameters at once
   config reset            Clear all parameters (revert to API defaults)
   history                 Show the current conversation context
-  history clear           Clear conversation history (start a new conversation)
+  history clear           Clear conversation history
   session chat            Show the full conversation transcript
   session summary         Show aggregate session statistics
   session api             Show raw API request/response payloads
