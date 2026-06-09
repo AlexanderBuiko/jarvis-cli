@@ -18,6 +18,10 @@ from .commands import (
     handle_config_reset,
     handle_history_show,
     handle_history_clear,
+    handle_history_load,
+    handle_history_new,
+    handle_history_rename,
+    handle_history_delete,
     handle_session_chat,
     handle_session_summary,
     handle_session_api,
@@ -91,9 +95,18 @@ def _dispatch(
     if cmd == "history":
         if not args:
             return handle_history_show(agent)
-        if args[0].lower() == "clear":
+        sub = args[0].lower()
+        if sub == "clear":
             return handle_history_clear(agent)
-        return "Usage: history | history clear"
+        if sub == "load":
+            return handle_history_load(args[1:], agent)
+        if sub == "new":
+            return handle_history_new(args[1:], agent)
+        if sub == "rename":
+            return handle_history_rename(args[1:], agent)
+        if sub == "delete":
+            return handle_history_delete(args[1:], agent)
+        return "Usage: history | history clear | history load [<name-or-id>] | history new [name] | history rename <name> | history delete <name-or-id>"
 
     if cmd == "session":
         if args:
