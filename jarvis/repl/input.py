@@ -37,7 +37,7 @@ from prompt_toolkit.styles import Style
 
 COMMAND_TREE: dict[str, dict] = {
     "session": {"chat": {}, "summary": {}, "api": {}},
-    "history": {"clear": {}},
+    "history": {"clear": {}, "load": {}, "new": {}, "rename": {}, "delete": {}},
     "config":  {"show": {}, "set": {}, "update": {}, "reset": {}},
     "help":    {},
     "exit":    {},
@@ -307,12 +307,13 @@ class InputController:
                 event.app.invalidate()
                 return
 
-            if self._buffer.text != "":
-                return
-
             hist = self._prompt_hist if self._mode == "prompt" else self._command_hist
             ptr_attr = "_prompt_ptr" if self._mode == "prompt" else "_command_ptr"
             ptr = getattr(self, ptr_attr)
+
+            # Allow navigation only when buffer is empty OR already navigating.
+            if self._buffer.text != "" and ptr == -1:
+                return
 
             if not hist:
                 return
@@ -359,7 +360,7 @@ class InputController:
                 return
             text = self._buffer.text
             suggestion = self._suggestions[self._suggestion_idx]
-            new_text = apply_suggestion(text, suggestion)
+            new_text = apply_suggestion(text, suggestion).rstrip() + " "
             self._buffer.set_document(Document(new_text, cursor_position=len(new_text)))
             next_suggestions = get_suggestions(new_text)
             self._suggestions = next_suggestions[:MAX_SUGGESTIONS]
@@ -372,6 +373,17 @@ class InputController:
             self._suggestions = []
             self._prompt_ptr = -1
             self._command_ptr = -1
+            event.app.invalidate()
+
+        @kb.add("c-g", eager=True)
+        def _ctrl_g(event) -> None:
+            """Clear the input buffer and reset all navigation/suggestion state."""
+            self._buffer.set_document(Document(""), bypass_readonly=False)
+            self._suggestions = []
+            self._suggestion_idx = 0
+            self._prompt_ptr = -1
+            self._command_ptr = -1
+            self._saved_input = ""
             event.app.invalidate()
 
         @kb.add("c-d")

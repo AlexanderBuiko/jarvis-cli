@@ -18,29 +18,37 @@ Modes
   !   Command mode — input is dispatched to the REPL
 
   Type ! on an empty line to toggle between modes.
-  History (↑/↓ on empty line)
-  Autocomplete (↑/↓/Tab in command mode when suggestions are visible)
+  Ctrl+G             Clear the input buffer
+  ↑ / ↓             Navigate session history (prompt or command)
+  ↑ / ↓             Navigate autocomplete suggestions when visible
+  Tab                Accept selected suggestion
 
 Commands
 ────────
-  help                    Show this help message
-  config show             Show active configuration parameters
-  config set <key> <val>  Set a parameter
-  config update <k=v> …   Set multiple parameters at once
-  config reset            Clear all parameters (revert to API defaults)
-  history                 Show the current conversation context
-  history clear           Clear conversation history
-  session chat            Show the full conversation transcript
-  session summary         Show aggregate session statistics
-  session api             Show raw API request/response payloads
-  exit / quit             Exit Jarvis
+  help                          Show this help message
+
+  config show                   Show active configuration parameters
+  config set <key> <val>        Set a parameter
+  config update <k=v> …         Set multiple parameters at once
+  config reset                  Clear all parameters (revert to API defaults)
+
+  history                       Show the current conversation context
+  history clear                 Clear the active thread's messages
+  history load                  List all saved threads
+  history load <name-or-id>     Switch to an existing thread
+  history new [name]            Start a new empty thread
+  history rename <name>         Rename the active thread
+  history delete <name-or-id>   Permanently delete a thread
+
+  session chat                  Show the full conversation transcript
+  session summary               Show aggregate session statistics
+  session api                   Show raw API request/response payloads
+
+  exit / quit                   Exit Jarvis
 
 Parameters
 ──────────
-  model              str   OpenRouter model identifier
-                           Default: anthropic/claude-sonnet-4
-                           Example: config set model anthropic/claude-haiku-3
-
+  model              str    OpenRouter model identifier
   temperature        float  0.0 – 2.0   Sampling temperature
   top_p              float  0.0 – 1.0   Nucleus sampling probability
   top_k              int                Top-k sampling cutoff
@@ -48,30 +56,15 @@ Parameters
   seed               int | none         Random seed for reproducibility
 
   solution_strategy  direct | step_by_step | prompt_generation | expert_panel
-                           Controls how the agent approaches the problem.
                              direct            — answer immediately (default)
                              step_by_step      — reason through steps explicitly
                              expert_panel      — three-expert panel with synthesis
-                             prompt_generation — stage 1: generate an optimised
-                                                 prompt; stage 2: answer with it
-
-Examples
-────────
-  config set model anthropic/claude-haiku-3
-  config set temperature 0.8
-  config set solution_strategy step_by_step
-  config update temperature=0.5 max_tokens=500
-  config reset
-  history
-  history clear
-  session chat
-  session summary
-  session api
+                             prompt_generation — two-stage optimised prompt pipeline
 """
 
 
 def handle_help() -> str:
-    return HELP_TEXT
+    return HELP_TEXT + "\n"
 
 
 def handle_config_show(config_manager: ConfigManager) -> str:
@@ -100,7 +93,7 @@ def handle_config_update(args: list[str], config_manager: ConfigManager) -> str:
 
 def handle_config_reset(config_manager: ConfigManager) -> str:
     config_manager.reset()
-    return "Configuration cleared. Using API defaults."
+    return "Configuration cleared. Using API defaults.\n"
 
 
 def handle_history_show(agent: JarvisAgent) -> str:
@@ -132,6 +125,47 @@ def handle_history_clear(agent: JarvisAgent) -> str:
     return "Conversation history cleared."
 
 
+def handle_history_load(args: list[str], agent: JarvisAgent) -> str:
+    if not args:
+        threads = agent.list_threads()
+        if not threads:
+            return "No saved threads."
+        sep = "─" * 50
+        lines = [f"Saved threads ({len(threads)})", sep]
+        for t in threads:
+            active_marker = " ←" if t["id"] == agent.thread_id else ""
+            lines.append(
+                f"  {t['name']:<20}  {t['id']}  {t['turns']} turn(s){active_marker}"
+            )
+        lines.append(sep)
+        lines.append("Use: history load <name-or-id>")
+        return "\n".join(lines)
+    query = args[0]
+    if agent.load_thread(query):
+        return f"Loaded thread '{agent.thread_name}' ({agent.thread_id})  —  {len(agent.history) // 2} turn(s) restored."
+    return f"Thread not found: '{query}'. Use 'history load' to see available threads."
+
+
+def handle_history_new(args: list[str], agent: JarvisAgent) -> str:
+    name = args[0] if args else None
+    thread_name = agent.new_thread(name)
+    return f"New thread started: '{thread_name}'."
+
+
+def handle_history_rename(args: list[str], agent: JarvisAgent) -> str:
+    if not args:
+        return "Usage: history rename <new-name>"
+    new_name = args[0]
+    agent.rename_thread(new_name)
+    return f"Thread renamed to '{new_name}'.\n"
+
+
+def handle_history_delete(args: list[str], agent: JarvisAgent) -> str:
+    if not args:
+        return "Usage: history delete <name-or-id>"
+    return agent.delete_thread(args[0])
+
+
 def handle_session_chat(session_store: SessionStore) -> str:
     return session_store.format_chat()
 
@@ -141,4 +175,4 @@ def handle_session_summary(session_store: SessionStore) -> str:
 
 
 def handle_session_api(session_store: SessionStore) -> str:
-    return session_store.format_api()
+    return session_store.format_api() + "\n"
