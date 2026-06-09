@@ -1,19 +1,21 @@
 """
-Builds system and user prompts from the active mode's runtime params dict.
+Prompt construction for JarvisAgent.
 
-All functions accept *params* — the mode's live configuration snapshot.
-A key's mere presence in the dict activates the corresponding behaviour;
-absence means the feature is off for that mode.
+Builds the system prompt from the active configuration and wraps user messages
+with strategy-specific instructions when a solution strategy is set.
 """
 
 from typing import Any
 
 
-_FORMAT_INSTRUCTIONS: dict[str, str] = {
-    "plain": "Respond in plain prose.",
-    "bullet_list": "Format your response as a bullet list.",
-    "numbered_list": "Format your response as a numbered list.",
-}
+_BASE_SYSTEM_PROMPT = """\
+You are Jarvis, an AI agent.
+
+Your responsibility is to process user requests and provide useful, accurate responses.
+
+If information is missing, ask clarifying questions.
+
+Be concise unless the user requests detailed explanations."""
 
 _STEP_BY_STEP_INSTRUCTION = (
     "Think through this problem step by step. "
@@ -28,45 +30,27 @@ _EXPERT_PANEL_INSTRUCTION = (
 
 
 def build_system_prompt(params: dict[str, Any]) -> str:
-    """Return the system prompt implied by the active mode's params."""
-    lines = ["You are Jarvis, a helpful and concise assistant."]
+    """Return the system prompt for the current configuration.
 
-    # Response format (response_control mode)
-    if "response_format" in params:
-        instruction = _FORMAT_INSTRUCTIONS.get(params["response_format"], "")
-        if instruction:
-            lines.append(instruction)
+    step_by_step and expert_panel strategies append additional instructions
+    to the base agent prompt.
+    """
+    parts = [_BASE_SYSTEM_PROMPT]
 
-    # Length constraint (response_control mode)
-    if "max_words" in params:
-        lines.append(f"Keep your response to a maximum of {params['max_words']} words.")
+    strategy = params.get("solution_strategy", "direct")
+    if strategy == "step_by_step":
+        parts.append(_STEP_BY_STEP_INSTRUCTION)
+    elif strategy == "expert_panel":
+        parts.append(_EXPERT_PANEL_INSTRUCTION)
 
-    # Prompt-level stop marker (response_control mode, when enabled)
-    if params.get("prompt_stop_enabled") and "stop_sequence" in params:
-        lines.append(
-            f'When you have finished your response, write exactly '
-            f'"{params["stop_sequence"]}" on its own line.'
-        )
-
-    # Reasoning strategy (prompting mode)
-    if "solution_strategy" in params:
-        strategy = params["solution_strategy"]
-        if strategy == "step_by_step":
-            lines.append(_STEP_BY_STEP_INSTRUCTION)
-        elif strategy == "expert_panel":
-            lines.append(_EXPERT_PANEL_INSTRUCTION)
-        # "direct" and "prompt_generation" add nothing here.
-        # "prompt_generation" is handled as a two-phase flow in the REPL loop.
-
-    return "\n".join(lines)
+    return "\n\n".join(parts)
 
 
 def build_strategy_prompt(params: dict[str, Any], user_request: str) -> str:
-    """Wrap *user_request* with strategy-specific instructions for the user turn.
+    """Wrap the user request with strategy-specific instructions for the user turn.
 
-    Only ``step_by_step`` and ``expert_panel`` augment the message here.
-    ``direct`` and ``prompt_generation`` pass the request through unchanged
-    (``prompt_generation`` phase-2 message is produced by the REPL loop).
+    step_by_step and expert_panel add framing to both the system prompt and
+    the user turn. direct and prompt_generation pass the request through unchanged.
     """
     strategy = params.get("solution_strategy", "direct")
 
@@ -93,9 +77,10 @@ def build_strategy_prompt(params: dict[str, Any], user_request: str) -> str:
 
 
 def build_prompt_generation_request(user_request: str) -> str:
-    """Stage-1 message for the ``prompt_generation`` strategy.
+    """Stage-1 message for the prompt_generation strategy.
 
     Asks the model to produce the most effective prompt for the task.
+    The generated prompt is used as the user message in the stage-2 request.
     """
     return (
         "Create the most effective prompt that would help an AI solve the "
@@ -103,27 +88,3 @@ def build_prompt_generation_request(user_request: str) -> str:
         f"Task:\n{user_request}\n\n"
         "Output only the prompt itself, with no explanation or commentary."
     )
-
-
-def build_clarification_prompt(params: dict[str, Any], question_number: int) -> str:
-    """Return an instruction asking the model for one clarification question."""
-    total = params.get("clarification_questions", 0)
-    return (
-        f"Before answering, ask clarification question {question_number} of "
-        f"{total}. Ask only this single question now. "
-        "Do not answer the original request yet."
-    )
-
-
-def build_final_prompt(original_request: str, clarifications: list[tuple[str, str]]) -> str:
-    """Build the final user message, embedding any collected clarification Q&A."""
-    if not clarifications:
-        return original_request
-
-    parts = [f"Original request: {original_request}", "", "Clarification answers:"]
-    for i, (question, answer) in enumerate(clarifications, start=1):
-        parts.append(f"  Q{i}: {question}")
-        parts.append(f"  A{i}: {answer}")
-    parts.append("")
-    parts.append("Now provide the final answer.")
-    return "\n".join(parts)

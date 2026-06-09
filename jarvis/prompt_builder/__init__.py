@@ -1,3 +1,3 @@
-from .builder import build_system_prompt, build_clarification_prompt, build_final_prompt
+from .builder import build_system_prompt, build_strategy_prompt, build_prompt_generation_request
 
-__all__ = ["build_system_prompt", "build_clarification_prompt", "build_final_prompt"]
+__all__ = ["build_system_prompt", "build_strategy_prompt", "build_prompt_generation_request"]
