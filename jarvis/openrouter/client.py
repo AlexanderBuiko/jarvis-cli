@@ -33,6 +33,7 @@ class OpenRouterClient:
     def __init__(self) -> None:
         self.api_key = self._load_api_key()
         self._pricing_cache: dict[str, tuple[float | None, float | None]] = {}
+        self._context_window_cache: dict[str, int] = {}
         self._pricing_fetched = False
 
     def complete(
@@ -60,6 +61,12 @@ class OpenRouterClient:
             latency_ms=latency_ms,
         )
 
+    def get_context_window(self, model_id: str) -> int | None:
+        """Return the context window size (in tokens) for a model, or None."""
+        if not self._pricing_fetched:
+            self._fetch_pricing()
+        return self._context_window_cache.get(model_id)
+
     def get_pricing(
         self, model_id: str
     ) -> tuple[float | None, float | None]:
@@ -80,6 +87,9 @@ class OpenRouterClient:
             # Disable automatic fallback so the recorded model always matches
             # the requested model.
             "provider": {"allow_fallbacks": False},
+            # Disable OpenRouter's automatic context compression so the full
+            # prompt is always sent and token counts remain accurate.
+            "plugins": [{"id": "context-compression", "enabled": False}],
         }
         for field in ("temperature", "top_p", "max_tokens", "top_k", "seed"):
             if field in params and params[field] is not None:
@@ -107,6 +117,12 @@ class OpenRouterClient:
                         self._pricing_cache[model_id] = (input_per_m, output_per_m)
                     except (KeyError, ValueError, TypeError):
                         self._pricing_cache[model_id] = (None, None)
+                    try:
+                        ctx = model.get("context_length")
+                        if ctx is not None:
+                            self._context_window_cache[model_id] = int(ctx)
+                    except (ValueError, TypeError):
+                        pass
         except Exception:
             pass  # pricing unavailable; costs will be stored as None
         finally:

@@ -18,6 +18,8 @@ Command autocomplete (command mode only):
 
 from __future__ import annotations
 
+from typing import Callable
+
 from prompt_toolkit import Application
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.document import Document
@@ -37,7 +39,7 @@ from prompt_toolkit.styles import Style
 
 COMMAND_TREE: dict[str, dict] = {
     "session": {"chat": {}, "summary": {}, "api": {}},
-    "history": {"clear": {}, "load": {}, "new": {}, "rename": {}, "delete": {}},
+    "thread":  {"summary": {}, "load": {}, "new": {}, "clear": {}, "rename": {}, "delete": {}},
     "config":  {"show": {}, "set": {}, "update": {}, "reset": {}},
     "help":    {},
     "exit":    {},
@@ -131,7 +133,9 @@ class InputController:
       text        raw buffer content, stripped
     """
 
-    def __init__(self) -> None:
+    def __init__(self, status_fn: Callable[[], str] | None = None) -> None:
+        self._status_fn = status_fn
+
         # ── Mode ──────────────────────────────────────────────────────────────
         self._mode: str = "prompt"  # "prompt" | "command"
 
@@ -229,17 +233,32 @@ class InputController:
             filter=has_suggestions,
         )
 
+        containers = []
+        if self._status_fn is not None:
+            containers.append(
+                Window(
+                    content=FormattedTextControl(self._render_status),
+                    height=1,
+                    dont_extend_height=True,
+                )
+            )
+        containers += [
+            VSplit([prefix_window, input_window]),
+            suggestions_window,
+        ]
+
         layout = Layout(
-            HSplit([
-                VSplit([prefix_window, input_window]),
-                suggestions_window,
-            ]),
+            HSplit(containers),
             focused_element=self._buffer,
         )
 
         kb = merge_key_bindings([self._build_key_bindings(), load_emacs_bindings()])
 
-        style = Style.from_dict({"suggestion": SUGGESTION_COLOR, "hint": "#6b7280 italic"})
+        style = Style.from_dict({
+            "suggestion": SUGGESTION_COLOR,
+            "hint": "#6b7280 italic",
+            "status": "#8b9dc3",
+        })
 
         return Application(
             layout=layout,
@@ -250,6 +269,16 @@ class InputController:
         )
 
     # ── Rendering ─────────────────────────────────────────────────────────────
+
+    def _render_status(self) -> FormattedText:
+        text = self._status_fn() if self._status_fn else ""
+        try:
+            from prompt_toolkit.application import get_app
+            width = get_app().output.get_size().columns
+        except Exception:
+            width = 80
+        padded = text.ljust(width)
+        return FormattedText([("class:status", padded)])
 
     def _render_hint(self) -> FormattedText:
         text = (

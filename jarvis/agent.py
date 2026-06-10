@@ -37,10 +37,17 @@ class JarvisAgent:
 
         last = self._threads.load_last()
         if last:
-            self._thread_id, self._thread_name, self._history = last
+            self._thread_id, self._thread_name, self._history, self._thread_total_tokens, self._thread_total_cost, self._cost_series = last
         else:
             self._thread_id, self._thread_name = self._threads.new_thread()
             self._history = []
+            self._thread_total_tokens: int = 0
+            self._thread_total_cost: float = 0.0
+            self._cost_series: list = []
+
+        # Prompt tokens from the most recent API call — represents how much of
+        # the context window is currently in use (system + full history + last user msg).
+        self._last_context_tokens: int = 0
 
         self._session = SessionStore()
 
@@ -87,7 +94,35 @@ class JarvisAgent:
 
         self._history.append({"role": "user", "content": user_input})
         self._history.append({"role": "assistant", "content": response_text})
-        self._threads.save(self._thread_id, self._thread_name, self._history)
+
+        # Update cumulative token/cost counters from the final API call.
+        final_call = api_calls[-1]
+        usage = final_call["response"].get("usage") or {}
+
+        # native_tokens_total is the model-side count after chat-template expansion;
+        # it matches what the model's context-limit check uses and is more accurate
+        # than total_tokens (OpenRouter's pre-template estimate).
+        # Falls back to total_tokens when the provider does not return native counts.
+        native_ctx: int | None = usage.get("native_tokens_total") or usage.get("total_tokens") or None
+        self._last_context_tokens = native_ctx or 0
+
+        # total_tokens (billing metric) is used for the cumulative billing counter.
+        billing_tokens = usage.get("total_tokens") or 0
+        turn_cost = (final_call.get("cost") or {}).get("total_usd") or 0.0
+        self._thread_total_tokens += billing_tokens
+        self._thread_total_cost += turn_cost
+        turn_index = len(self._history) // 2
+        # native_ctx stored as 4th element so the context chart can use persisted data.
+        self._cost_series.append([turn_index, turn_cost, self._thread_total_cost, native_ctx])
+
+        self._threads.save(
+            self._thread_id,
+            self._thread_name,
+            self._history,
+            self._thread_total_tokens,
+            self._thread_total_cost,
+            self._cost_series,
+        )
 
         self._session.add(
             user_input=user_input,
@@ -103,12 +138,20 @@ class JarvisAgent:
     def reset_history(self) -> None:
         """Clear the active thread's messages (thread record is preserved)."""
         self._history.clear()
+        self._thread_total_tokens = 0
+        self._thread_total_cost = 0.0
+        self._cost_series = []
+        self._last_context_tokens = 0
         self._threads.save(self._thread_id, self._thread_name, self._history)
 
     def new_thread(self, name: str | None = None) -> str:
         """Start a new empty thread. Returns the new thread name."""
         self._thread_id, self._thread_name = self._threads.new_thread(name)
         self._history = []
+        self._thread_total_tokens = 0
+        self._thread_total_cost = 0.0
+        self._cost_series = []
+        self._last_context_tokens = 0
         return self._thread_name
 
     def load_thread(self, query: str) -> bool:
@@ -119,9 +162,10 @@ class JarvisAgent:
         result = self._threads.load_by_name_or_id(query)
         if result is None:
             return False
-        self._thread_id, self._thread_name, self._history = result
+        self._thread_id, self._thread_name, self._history, self._thread_total_tokens, self._thread_total_cost, self._cost_series = result
+        self._last_context_tokens = 0  # unknown until the next API call in this session
         # Touch the file so it becomes the new "last used" thread.
-        self._threads.save(self._thread_id, self._thread_name, self._history)
+        self._threads.save(self._thread_id, self._thread_name, self._history, self._thread_total_tokens, self._thread_total_cost, self._cost_series)
         return True
 
     def delete_thread(self, query: str) -> str:
@@ -135,14 +179,14 @@ class JarvisAgent:
         result = self._threads.load_by_name_or_id(query)
         if result is None:
             return f"Thread not found: '{query}'."
-        target_id, target_name, _ = result
+        target_id, target_name, *_ = result
         self._threads.delete(target_id)
 
         if target_id == self._thread_id:
             last = self._threads.load_last()
             if last:
-                self._thread_id, self._thread_name, self._history = last
-                self._threads.save(self._thread_id, self._thread_name, self._history)
+                self._thread_id, self._thread_name, self._history, self._thread_total_tokens, self._thread_total_cost, self._cost_series = last
+                self._threads.save(self._thread_id, self._thread_name, self._history, self._thread_total_tokens, self._thread_total_cost, self._cost_series)
                 return (
                     f"Thread '{target_name}' deleted. "
                     f"Switched to '{self._thread_name}'."
@@ -150,6 +194,10 @@ class JarvisAgent:
             else:
                 self._thread_id, self._thread_name = self._threads.new_thread()
                 self._history = []
+                self._thread_total_tokens = 0
+                self._thread_total_cost = 0.0
+                self._cost_series = []
+                self._last_context_tokens = 0
                 return (
                     f"Thread '{target_name}' deleted. "
                     f"Started new thread '{self._thread_name}'."
@@ -160,7 +208,7 @@ class JarvisAgent:
     def rename_thread(self, new_name: str) -> str:
         """Rename the active thread. Returns the new name."""
         self._thread_name = new_name
-        self._threads.rename(self._thread_id, self._thread_name, self._history)
+        self._threads.rename(self._thread_id, self._thread_name, self._history, self._thread_total_tokens, self._thread_total_cost, self._cost_series)
         return self._thread_name
 
     def list_threads(self) -> list[dict]:
@@ -179,6 +227,32 @@ class JarvisAgent:
     def history(self) -> list[dict]:
         """A copy of the current conversation history (alternating user/assistant turns)."""
         return list(self._history)
+
+    @property
+    def last_context_tokens(self) -> int:
+        """total_tokens from the most recent API call — current context window fill.
+
+        Uses total_tokens (prompt + completion) because the current completion
+        becomes part of the history sent on the next turn.
+        """
+        return self._last_context_tokens
+
+    @property
+    def thread_total_tokens(self) -> int:
+        """Cumulative total tokens billed across all turns in this thread."""
+        return self._thread_total_tokens
+
+    @property
+    def thread_total_cost(self) -> float:
+        return self._thread_total_cost
+
+    @property
+    def cost_series(self) -> list:
+        """Per-turn cost series: list of [turn_index, request_cost_usd, cumulative_cost_usd]."""
+        return list(self._cost_series)
+
+    def get_context_window(self, model_id: str) -> int | None:
+        return self._client.get_context_window(model_id)
 
     @property
     def session(self) -> SessionStore:
