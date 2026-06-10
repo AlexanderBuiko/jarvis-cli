@@ -16,12 +16,13 @@ from .commands import (
     handle_config_set,
     handle_config_update,
     handle_config_reset,
-    handle_history_show,
-    handle_history_clear,
-    handle_history_load,
-    handle_history_new,
-    handle_history_rename,
-    handle_history_delete,
+    handle_thread_show,
+    handle_thread_clear,
+    handle_thread_load,
+    handle_thread_new,
+    handle_thread_rename,
+    handle_thread_delete,
+    handle_thread_summary,
     handle_session_chat,
     handle_session_summary,
     handle_session_api,
@@ -29,13 +30,23 @@ from .commands import (
 from .input import InputController
 from ..agent import JarvisAgent
 from ..config.manager import ConfigManager
+from ..openrouter.client import DEFAULT_MODEL
 
 
 def run_repl(agent: JarvisAgent, config_manager: ConfigManager) -> None:
     print(_banner())
     print("Starts in prompt mode (>). Type ! on an empty line to switch modes.\n")
 
-    controller = InputController()
+    def _status_fn() -> str:
+        tok = agent.last_context_tokens
+        model = config_manager.runtime.get("model") or DEFAULT_MODEL
+        ctx = agent.get_context_window(model)
+        if ctx:
+            pct = round(tok * 100 / ctx)
+            return f"{tok:,}/{ctx:,} ({pct}%) tok"
+        return f"{tok:,} tok"
+
+    controller = InputController(status_fn=_status_fn)
 
     while True:
         try:
@@ -92,21 +103,25 @@ def _dispatch(
             return handle_config_update(args[1:], config_manager)
         return f"Unknown config sub-command: '{sub}'"
 
-    if cmd == "history":
+    if cmd == "thread":
         if not args:
-            return handle_history_show(agent)
+            return handle_thread_show(agent)
         sub = args[0].lower()
         if sub == "clear":
-            return handle_history_clear(agent)
+            return handle_thread_clear(agent)
         if sub == "load":
-            return handle_history_load(args[1:], agent)
+            return handle_thread_load(args[1:], agent)
         if sub == "new":
-            return handle_history_new(args[1:], agent)
+            return handle_thread_new(args[1:], agent)
         if sub == "rename":
-            return handle_history_rename(args[1:], agent)
+            return handle_thread_rename(args[1:], agent)
         if sub == "delete":
-            return handle_history_delete(args[1:], agent)
-        return "Usage: history | history clear | history load [<name-or-id>] | history new [name] | history rename <name> | history delete <name-or-id>"
+            return handle_thread_delete(args[1:], agent)
+        if sub == "summary":
+            model = config_manager.runtime.get("model") or DEFAULT_MODEL
+            ctx = agent.get_context_window(model)
+            return handle_thread_summary(agent, ctx)
+        return "Usage: thread | thread clear | thread load [<name-or-id>] | thread new [name] | thread rename <name> | thread delete <name-or-id> | thread summary"
 
     if cmd == "session":
         if args:
