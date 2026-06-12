@@ -11,9 +11,16 @@ from .prompt_builder.builder import (
     build_system_prompt,
     build_strategy_prompt,
     build_prompt_generation_request,
+    build_summary_prompt,
 )
 from .session.store import SessionStore
 from .session.thread_store import ThreadStore
+
+
+# Number of turns that trigger a compression cycle.
+_COMPRESSION_INTERVAL: int = 5
+# Number of most-recent turns always sent verbatim (never compressed).
+_RECENT_TURNS: int = 5
 
 
 class JarvisAgent:
@@ -37,13 +44,19 @@ class JarvisAgent:
 
         last = self._threads.load_last()
         if last:
-            self._thread_id, self._thread_name, self._history, self._thread_total_tokens, self._thread_total_cost, self._cost_series = last
+            (
+                self._thread_id, self._thread_name, self._history,
+                self._thread_total_tokens, self._thread_total_cost, self._cost_series,
+                self._summary, self._summary_covered_turns,
+            ) = last
         else:
             self._thread_id, self._thread_name = self._threads.new_thread()
             self._history = []
             self._thread_total_tokens: int = 0
             self._thread_total_cost: float = 0.0
             self._cost_series: list = []
+            self._summary: str | None = None
+            self._summary_covered_turns: int = 0
 
         # Prompt tokens from the most recent API call — represents how much of
         # the context window is currently in use (system + full history + last user msg).
@@ -79,12 +92,12 @@ class JarvisAgent:
         else:
             final_user_message = build_strategy_prompt(params, user_input)
 
-        # system + full prior history + current (strategy-processed) user turn.
+        # system + compressed-or-full history + current (strategy-processed) user turn.
         # History stores the original user text; strategy wrapping applies only
         # to the outgoing request and is not persisted in history.
         messages = (
             [{"role": "system", "content": system_prompt}]
-            + self._history
+            + self._build_context()
             + [{"role": "user", "content": final_user_message}]
         )
 
@@ -115,6 +128,8 @@ class JarvisAgent:
         # native_ctx stored as 4th element so the context chart can use persisted data.
         self._cost_series.append([turn_index, turn_cost, self._thread_total_cost, native_ctx])
 
+        compression_notice = self._maybe_compress()
+
         self._threads.save(
             self._thread_id,
             self._thread_name,
@@ -122,6 +137,8 @@ class JarvisAgent:
             self._thread_total_tokens,
             self._thread_total_cost,
             self._cost_series,
+            self._summary,
+            self._summary_covered_turns,
         )
 
         self._session.add(
@@ -133,6 +150,8 @@ class JarvisAgent:
             generated_prompt=generated_prompt,
         )
 
+        if compression_notice:
+            return f"{response_text}\n\n{compression_notice}"
         return response_text
 
     def reset_history(self) -> None:
@@ -142,6 +161,8 @@ class JarvisAgent:
         self._thread_total_cost = 0.0
         self._cost_series = []
         self._last_context_tokens = 0
+        self._summary = None
+        self._summary_covered_turns = 0
         self._threads.save(self._thread_id, self._thread_name, self._history)
 
     def new_thread(self, name: str | None = None) -> str:
@@ -152,6 +173,8 @@ class JarvisAgent:
         self._thread_total_cost = 0.0
         self._cost_series = []
         self._last_context_tokens = 0
+        self._summary = None
+        self._summary_covered_turns = 0
         return self._thread_name
 
     def load_thread(self, query: str) -> bool:
@@ -162,10 +185,14 @@ class JarvisAgent:
         result = self._threads.load_by_name_or_id(query)
         if result is None:
             return False
-        self._thread_id, self._thread_name, self._history, self._thread_total_tokens, self._thread_total_cost, self._cost_series = result
+        (
+            self._thread_id, self._thread_name, self._history,
+            self._thread_total_tokens, self._thread_total_cost, self._cost_series,
+            self._summary, self._summary_covered_turns,
+        ) = result
         self._last_context_tokens = 0  # unknown until the next API call in this session
         # Touch the file so it becomes the new "last used" thread.
-        self._threads.save(self._thread_id, self._thread_name, self._history, self._thread_total_tokens, self._thread_total_cost, self._cost_series)
+        self._threads.save(self._thread_id, self._thread_name, self._history, self._thread_total_tokens, self._thread_total_cost, self._cost_series, self._summary, self._summary_covered_turns)
         return True
 
     def delete_thread(self, query: str) -> str:
@@ -185,8 +212,12 @@ class JarvisAgent:
         if target_id == self._thread_id:
             last = self._threads.load_last()
             if last:
-                self._thread_id, self._thread_name, self._history, self._thread_total_tokens, self._thread_total_cost, self._cost_series = last
-                self._threads.save(self._thread_id, self._thread_name, self._history, self._thread_total_tokens, self._thread_total_cost, self._cost_series)
+                (
+                    self._thread_id, self._thread_name, self._history,
+                    self._thread_total_tokens, self._thread_total_cost, self._cost_series,
+                    self._summary, self._summary_covered_turns,
+                ) = last
+                self._threads.save(self._thread_id, self._thread_name, self._history, self._thread_total_tokens, self._thread_total_cost, self._cost_series, self._summary, self._summary_covered_turns)
                 return (
                     f"Thread '{target_name}' deleted. "
                     f"Switched to '{self._thread_name}'."
@@ -198,6 +229,8 @@ class JarvisAgent:
                 self._thread_total_cost = 0.0
                 self._cost_series = []
                 self._last_context_tokens = 0
+                self._summary = None
+                self._summary_covered_turns = 0
                 return (
                     f"Thread '{target_name}' deleted. "
                     f"Started new thread '{self._thread_name}'."
@@ -208,7 +241,7 @@ class JarvisAgent:
     def rename_thread(self, new_name: str) -> str:
         """Rename the active thread. Returns the new name."""
         self._thread_name = new_name
-        self._threads.rename(self._thread_id, self._thread_name, self._history, self._thread_total_tokens, self._thread_total_cost, self._cost_series)
+        self._threads.rename(self._thread_id, self._thread_name, self._history, self._thread_total_tokens, self._thread_total_cost, self._cost_series, self._summary, self._summary_covered_turns)
         return self._thread_name
 
     def list_threads(self) -> list[dict]:
@@ -251,12 +284,87 @@ class JarvisAgent:
         """Per-turn cost series: list of [turn_index, request_cost_usd, cumulative_cost_usd]."""
         return list(self._cost_series)
 
+    @property
+    def summary(self) -> str | None:
+        """Current rolling summary text, or None if no compression has occurred."""
+        return self._summary
+
+    @property
+    def summary_covered_turns(self) -> int:
+        """Number of turns currently captured by the rolling summary."""
+        return self._summary_covered_turns
+
     def get_context_window(self, model_id: str) -> int | None:
         return self._client.get_context_window(model_id)
 
     @property
     def session(self) -> SessionStore:
         return self._session
+
+    # ── Private helpers ───────────────────────────────────────────────────────
+
+    def _build_context(self) -> list[dict]:
+        """Return the message list to include in the next API request.
+
+        When a summary exists, replaces the covered portion of history with a
+        synthetic exchange that presents the summary to the model, followed by
+        the verbatim recent tail.
+        """
+        if self._summary is None or self._summary_covered_turns == 0:
+            return self._history
+
+        recent = self._history[self._summary_covered_turns * 2:]
+        summary_block = [
+            {
+                "role": "user",
+                "content": (
+                    f"[Conversation summary — turns 1–{self._summary_covered_turns}]\n"
+                    f"{self._summary}"
+                ),
+            },
+            {
+                "role": "assistant",
+                "content": "Understood, I have the context from our earlier conversation.",
+            },
+        ]
+        return summary_block + recent
+
+    def _maybe_compress(self) -> str | None:
+        """Trigger a rolling compression cycle if the threshold has been reached.
+
+        Returns a human-readable notice string when compression ran, or None.
+        """
+        total_turns = len(self._history) // 2
+        if total_turns < _COMPRESSION_INTERVAL:
+            return None
+        if total_turns % _COMPRESSION_INTERVAL != 0:
+            return None
+
+        # How many turns should the summary cover after this cycle.
+        turns_to_cover = total_turns - _RECENT_TURNS
+        if turns_to_cover <= 0 or turns_to_cover <= self._summary_covered_turns:
+            return None
+
+        # The new chunk is only the turns not yet summarised.
+        new_chunk = self._history[self._summary_covered_turns * 2: turns_to_cover * 2]
+        if not new_chunk:
+            return None
+
+        self._summary = self._generate_summary(new_chunk)
+        self._summary_covered_turns = turns_to_cover
+        return (
+            f"[Context compressed: turns 1–{turns_to_cover} summarised. "
+            f"Turns {turns_to_cover + 1}–{total_turns} kept verbatim.]"
+        )
+
+    def _generate_summary(self, new_chunk: list[dict]) -> str:
+        """Call the LLM to produce an updated rolling summary."""
+        prompt = build_summary_prompt(self._summary, new_chunk)
+        params: dict = {}
+        if "model" in self._config.runtime:
+            params["model"] = self._config.runtime["model"]
+        result = self._client.complete([{"role": "user", "content": prompt}], params)
+        return result.text.strip()
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

@@ -76,6 +76,39 @@ def build_strategy_prompt(params: dict[str, Any], user_request: str) -> str:
     return user_request
 
 
+def build_summary_prompt(existing_summary: str | None, new_messages: list[dict]) -> str:
+    """Build the prompt used to update the rolling conversation summary.
+
+    Instructs the model to preserve concrete facts (names, numbers, decisions,
+    code snippets) so that summary drift stays minimal across compression cycles.
+    """
+    parts: list[str] = []
+
+    if existing_summary:
+        parts.append(
+            f"Existing conversation summary (covers earlier turns):\n{existing_summary}"
+        )
+
+    parts.append("New conversation turns to incorporate into the summary:")
+    for msg in new_messages:
+        label = "User" if msg["role"] == "user" else "Assistant"
+        parts.append(f"{label}: {msg['content']}")
+
+    parts.append(
+        "Produce an updated summary that covers all turns shown above.\n"
+        "Preservation rules — you MUST retain all of the following verbatim or with full precision:\n"
+        "  • Specific names, identifiers, file paths, URLs\n"
+        "  • Numbers, measurements, dates, version strings\n"
+        "  • Code snippets, commands, configuration values\n"
+        "  • Decisions made and their stated reasons\n"
+        "  • Errors, failures, and how they were resolved\n"
+        "  • Any information the user explicitly marked as important\n"
+        "Write in third person. Be concise but complete. Output only the summary text, no preamble."
+    )
+
+    return "\n\n".join(parts)
+
+
 def build_prompt_generation_request(user_request: str) -> str:
     """Stage-1 message for the prompt_generation strategy.
 

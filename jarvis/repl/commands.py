@@ -46,6 +46,7 @@ Commands
   thread rename <name>          Rename the active thread
   thread delete <name-or-id>    Permanently delete a thread
   thread summary                Show token and cost statistics for the active thread
+  thread compression            Show the rolling summary and compression state
 
   session chat                  Show the full conversation transcript
   session summary               Show aggregate session statistics with cost charts
@@ -250,6 +251,43 @@ def handle_thread_summary(
         if cum_chart:
             lines += [sep, cum_chart]
 
+    return "\n".join(lines)
+
+
+def handle_thread_compression(agent: JarvisAgent) -> str:
+    """Show the current rolling summary and compression state for the active thread."""
+    summary = agent.summary
+    covered = agent.summary_covered_turns
+    total_turns = len(agent.history) // 2
+    sep = "─" * 60
+
+    if summary is None:
+        if total_turns == 0:
+            return "No compression state — thread is empty."
+        return (
+            f"No compression yet ({total_turns} turn(s) in thread). "
+            f"Compression triggers every 10 turns when the thread exceeds 10 turns."
+        )
+
+    next_trigger = ((total_turns // 10) + 1) * 10
+    verbatim_start = covered + 1
+
+    lines = [
+        "Thread Compression State",
+        sep,
+        "",
+        f"  Summary covers:  turns 1–{covered}",
+        f"  Verbatim tail:   turns {verbatim_start}–{total_turns}",
+        f"  Next trigger:    turn {next_trigger}",
+        "",
+        sep,
+        "Summary",
+        sep,
+        "",
+    ]
+    for line in summary.splitlines():
+        lines.append(f"  {line}" if line else "")
+    lines += ["", sep]
     return "\n".join(lines)
 
 
