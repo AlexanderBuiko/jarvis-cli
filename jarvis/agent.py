@@ -128,7 +128,19 @@ class JarvisAgent:
         # native_ctx stored as 4th element so the context chart can use persisted data.
         self._cost_series.append([turn_index, turn_cost, self._thread_total_cost, native_ctx])
 
-        compression_notice = self._maybe_compress()
+        compression_notice, compression_record = self._maybe_compress()
+
+        if compression_record:
+            api_calls.append(compression_record)
+            comp_tokens = (compression_record["response"].get("usage") or {}).get("total_tokens") or 0
+            comp_cost = (compression_record.get("cost") or {}).get("total_usd") or 0.0
+            self._thread_total_tokens += comp_tokens
+            self._thread_total_cost += comp_cost
+            # Roll compression cost into the triggering turn's cost_series entry so
+            # charts reflect the full cost of operating that turn.
+            if self._cost_series:
+                self._cost_series[-1][1] += comp_cost
+                self._cost_series[-1][2] = self._thread_total_cost
 
         self._threads.save(
             self._thread_id,
@@ -329,42 +341,45 @@ class JarvisAgent:
         ]
         return summary_block + recent
 
-    def _maybe_compress(self) -> str | None:
+    def _maybe_compress(self) -> tuple[str | None, dict | None]:
         """Trigger a rolling compression cycle if the threshold has been reached.
 
-        Returns a human-readable notice string when compression ran, or None.
+        Returns (notice_string, api_call_record) when compression ran, or (None, None).
         """
         total_turns = len(self._history) // 2
         if total_turns < _COMPRESSION_INTERVAL:
-            return None
+            return None, None
         if total_turns % _COMPRESSION_INTERVAL != 0:
-            return None
+            return None, None
 
         # How many turns should the summary cover after this cycle.
         turns_to_cover = total_turns - _RECENT_TURNS
         if turns_to_cover <= 0 or turns_to_cover <= self._summary_covered_turns:
-            return None
+            return None, None
 
         # The new chunk is only the turns not yet summarised.
         new_chunk = self._history[self._summary_covered_turns * 2: turns_to_cover * 2]
         if not new_chunk:
-            return None
+            return None, None
 
-        self._summary = self._generate_summary(new_chunk)
+        summary_text, completion = self._generate_summary(new_chunk)
+        self._summary = summary_text
         self._summary_covered_turns = turns_to_cover
-        return (
+        record = _make_call_record(0, "context_compression", completion, self._client)
+        notice = (
             f"[Context compressed: turns 1–{turns_to_cover} summarised. "
             f"Turns {turns_to_cover + 1}–{total_turns} kept verbatim.]"
         )
+        return notice, record
 
-    def _generate_summary(self, new_chunk: list[dict]) -> str:
+    def _generate_summary(self, new_chunk: list[dict]) -> tuple[str, "Completion"]:
         """Call the LLM to produce an updated rolling summary."""
         prompt = build_summary_prompt(self._summary, new_chunk)
         params: dict = {}
         if "model" in self._config.runtime:
             params["model"] = self._config.runtime["model"]
-        result = self._client.complete([{"role": "user", "content": prompt}], params)
-        return result.text.strip()
+        completion = self._client.complete([{"role": "user", "content": prompt}], params)
+        return completion.text.strip(), completion
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
