@@ -23,7 +23,6 @@ from .commands import (
     handle_thread_rename,
     handle_thread_delete,
     handle_thread_summary,
-    handle_thread_compression,
     handle_session_chat,
     handle_session_summary,
     handle_session_api,
@@ -97,10 +96,20 @@ def _dispatch(
         if sub == "show":
             return handle_config_show(config_manager)
         if sub == "set":
+            if _changes_context_strategy("set", args[1:]) and agent.history:
+                return (
+                    "context_strategy can only be changed on an empty thread. "
+                    "Use 'thread new' or 'thread clear' first."
+                )
             return handle_config_set(args[1:], config_manager)
         if sub == "reset":
             return handle_config_reset(config_manager)
         if sub == "update":
+            if _changes_context_strategy("update", args[1:]) and agent.history:
+                return (
+                    "context_strategy can only be changed on an empty thread. "
+                    "Use 'thread new' or 'thread clear' first."
+                )
             return handle_config_update(args[1:], config_manager)
         return f"Unknown config sub-command: '{sub}'"
 
@@ -122,9 +131,7 @@ def _dispatch(
             model = config_manager.runtime.get("model") or DEFAULT_MODEL
             ctx = agent.get_context_window(model)
             return handle_thread_summary(agent, ctx)
-        if sub == "compression":
-            return handle_thread_compression(agent)
-        return "Usage: thread | thread clear | thread load [<name-or-id>] | thread new [name] | thread rename <name> | thread delete <name-or-id> | thread summary | thread compression"
+        return "Usage: thread | thread clear | thread load [<name-or-id>] | thread new [name] | thread rename <name> | thread delete <name-or-id> | thread summary"
 
     if cmd == "session":
         if args:
@@ -138,6 +145,18 @@ def _dispatch(
         return "Usage: session chat | session summary | session api"
 
     return f"Unknown command: '{cmd}'. Type 'help' for available commands."
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def _changes_context_strategy(sub: str, args: list[str]) -> bool:
+    """Return True if this config command would change context_strategy."""
+    if sub == "set":
+        return bool(args) and args[0].lower() == "context_strategy"
+    if sub == "update":
+        return any(a.lower().startswith("context_strategy=") for a in args)
+    return False
 
 
 # ── Banner ────────────────────────────────────────────────────────────────────

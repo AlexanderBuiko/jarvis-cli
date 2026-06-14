@@ -5,7 +5,7 @@ Each handler receives parsed arguments and shared application state, and
 returns a string to print. No I/O is performed here.
 """
 
-from ..agent import JarvisAgent
+from ..agent import JarvisAgent, _COMPRESSION_INTERVAL
 from ..config.manager import ConfigManager
 from ..session.store import (
     SessionStore,
@@ -45,8 +45,7 @@ Commands
   thread new [name]             Start a new empty thread
   thread rename <name>          Rename the active thread
   thread delete <name-or-id>    Permanently delete a thread
-  thread summary                Show token and cost statistics for the active thread
-  thread compression            Show the rolling summary and compression state
+  thread summary                Show token, cost, compression state, facts, and topic summaries
 
   session chat                  Show the full conversation transcript
   session summary               Show aggregate session statistics with cost charts
@@ -68,6 +67,16 @@ Parameters
                              step_by_step      — reason through steps explicitly
                              expert_panel      — three-expert panel with synthesis
                              prompt_generation — two-stage optimised prompt pipeline
+
+  context_strategy   none | compression | sliding_window | sticky_facts | topics
+                             none           — full history sent verbatim (default)
+                             compression    — rolling summary replaces older turns
+                             sliding_window — only the most recent N turns are sent
+                             sticky_facts   — structured facts block prepended to history
+                             topics         — automatic topic routing; context scoped per topic
+                             Can only be changed on an empty thread.
+
+  window_size        int    Number of turns kept when context_strategy=sliding_window (default: 10)
 """
 
 
@@ -119,14 +128,14 @@ def handle_thread_show(agent: JarvisAgent) -> str:
     turn = 0
     for i in range(0, len(history), 2):
         turn += 1
-        user_msg = history[i]["content"]
-        assistant_msg = (
-            history[i + 1]["content"] if i + 1 < len(history) else "(no response)"
-        )
+        user_entry = history[i]
+        asst_entry = history[i + 1] if i + 1 < len(history) else {}
+        topic = user_entry.get("topic")
+        label = f"[{turn}, {topic}]" if topic else f"[{turn}]"
         lines += [
             sep,
-            f"  [{turn}] You   : {user_msg}",
-            f"  [{turn}] Jarvis: {assistant_msg}",
+            f"  {label} You   : {user_entry['content']}",
+            f"  {label} Jarvis: {asst_entry.get('content', '(no response)')}",
         ]
     lines.append(sep)
     return "\n".join(lines)
@@ -251,43 +260,46 @@ def handle_thread_summary(
         if cum_chart:
             lines += [sep, cum_chart]
 
-    return "\n".join(lines)
-
-
-def handle_thread_compression(agent: JarvisAgent) -> str:
-    """Show the current rolling summary and compression state for the active thread."""
+    # ── Section 4: Compression state ─────────────────────────────────────────
     summary = agent.summary
-    covered = agent.summary_covered_turns
-    total_turns = len(agent.history) // 2
-    sep = "─" * 60
+    if summary is not None:
+        covered = agent.summary_covered_turns
+        verbatim_start = covered + 1
+        next_trigger = ((turn_count // _COMPRESSION_INTERVAL) + 1) * _COMPRESSION_INTERVAL
+        lines += [
+            sep, "Compression State", sep, "",
+            f"  Summary covers:  turns 1–{covered}",
+            f"  Verbatim tail:   turns {verbatim_start}–{turn_count}",
+            f"  Next trigger:    turn {next_trigger}",
+            "",
+        ]
+        for line in summary.splitlines():
+            lines.append(f"  {line}" if line else "")
+        lines += ["", sep]
 
-    if summary is None:
-        if total_turns == 0:
-            return "No compression state — thread is empty."
-        return (
-            f"No compression yet ({total_turns} turn(s) in thread). "
-            f"Compression triggers every 10 turns when the thread exceeds 10 turns."
-        )
+    # ── Section 5: Sticky facts ───────────────────────────────────────────────
+    facts = agent.facts
+    if facts is not None:
+        lines += [sep, "Sticky Facts", sep, ""]
+        for line in facts.splitlines():
+            lines.append(f"  {line}" if line else "")
+        lines += ["", sep]
 
-    next_trigger = ((total_turns // 10) + 1) * 10
-    verbatim_start = covered + 1
+    # ── Section 6: Topic summaries ────────────────────────────────────────────
+    topics = agent.topic_summaries
+    if topics:
+        lines += [sep, f"Topics ({len(topics)})", sep, ""]
+        for topic_name, topic_summary in topics.items():
+            topic_turns = sum(
+                1 for m in agent.history
+                if m.get("role") == "user" and m.get("topic") == topic_name
+            )
+            lines.append(f"  [{topic_name}]  {topic_turns} turn(s)")
+            for line in topic_summary.splitlines():
+                lines.append(f"    {line}" if line else "")
+            lines.append("")
+        lines.append(sep)
 
-    lines = [
-        "Thread Compression State",
-        sep,
-        "",
-        f"  Summary covers:  turns 1–{covered}",
-        f"  Verbatim tail:   turns {verbatim_start}–{total_turns}",
-        f"  Next trigger:    turn {next_trigger}",
-        "",
-        sep,
-        "Summary",
-        sep,
-        "",
-    ]
-    for line in summary.splitlines():
-        lines.append(f"  {line}" if line else "")
-    lines += ["", sep]
     return "\n".join(lines)
 
 
