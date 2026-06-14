@@ -109,6 +109,61 @@ def build_summary_prompt(existing_summary: str | None, new_messages: list[dict])
     return "\n\n".join(parts)
 
 
+def build_topic_routing_prompt(user_message: str, topic_summaries: dict[str, str]) -> str:
+    """Build the prompt used to determine which topic a user message belongs to.
+
+    When no topics exist yet, asks the model to create the first topic name.
+    When topics exist, asks the model to assign to an existing topic or create a new one.
+    Topic names are returned as short kebab-case identifiers.
+    """
+    if not topic_summaries:
+        return (
+            "Based on the following message, create a short topic name that describes what is being discussed.\n"
+            "Requirements: 2-4 words, kebab-case (e.g. android-architecture, job-search, travel-planning).\n\n"
+            f"Message: {user_message}\n\n"
+            "Output only the topic name, nothing else."
+        )
+
+    parts = ["Existing conversation topics:"]
+    for name, summary in topic_summaries.items():
+        parts.append(f"  {name}: {summary}")
+    parts.append(f"\nNew message: {user_message}")
+    parts.append(
+        "\nDecide whether this message continues an existing topic or starts a new one.\n"
+        "If it continues an existing topic: output that topic's exact name.\n"
+        "If it starts a new topic: output a short new topic name (2-4 words, kebab-case).\n"
+        "Output only the topic name, nothing else."
+    )
+    return "\n\n".join(parts)
+
+
+def build_facts_extraction_prompt(existing_facts: str | None, latest_exchange: list[dict]) -> str:
+    """Build the prompt used to update the sticky facts after each turn.
+
+    Instructs the model to maintain a key-value facts list covering goals,
+    constraints, preferences, decisions, and agreements from the conversation.
+    """
+    parts: list[str] = []
+
+    if existing_facts:
+        parts.append(f"Current facts:\n{existing_facts}")
+
+    parts.append("Latest exchange to incorporate:")
+    for msg in latest_exchange:
+        label = "User" if msg["role"] == "user" else "Assistant"
+        parts.append(f"{label}: {msg['content']}")
+
+    parts.append(
+        "Update the facts list based on the latest exchange.\n"
+        "Keep all existing facts that are still valid. Add newly learned facts. Remove facts that are no longer true.\n"
+        "Format: one fact per line as 'key: value'.\n"
+        "Track facts in these categories: goals, constraints, preferences, decisions, agreements.\n"
+        "Output only the updated facts list, no preamble or explanation."
+    )
+
+    return "\n\n".join(parts)
+
+
 def build_prompt_generation_request(user_request: str) -> str:
     """Stage-1 message for the prompt_generation strategy.
 

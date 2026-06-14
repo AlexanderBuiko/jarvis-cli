@@ -1,0 +1,26 @@
+{
+  "thread": "thread_with_sliding_window",
+  "config": {
+    "model": "openai/gpt-3.5-turbo",
+    "seed": 42,
+    "context_strategy": "sliding_window"
+  },
+  "messages": [
+    "Explain in detail how a modern Android app handles cold start performance optimization, including class loading, dependency injection initialization, and UI rendering pipeline considerations. Provide architectural implications for large-scale apps.",
+    "Compare three architectural patterns in Android development: MVVM, MVI, and Clean Architecture. Include tradeoffs in terms of testability, maintainability, and runtime overhead in large production applications.",
+    "Describe how Kotlin coroutines are scheduled internally. Explain dispatchers, thread pools, and how structured concurrency affects cancellation propagation in deeply nested async workflows.",
+    "Explain how Retrofit integrates with OkHttp under the hood. Include call adapter behavior, converter factories, and how suspend functions are translated into HTTP request execution.",
+    "Design a scalable caching strategy for a fintech mobile application that must support offline mode, partial sync, and conflict resolution. Include data layer architecture.",
+    "Describe how RecyclerView recycling mechanism works internally. Explain view holder reuse, layout manager responsibilities, and performance pitfalls in complex nested lists.",
+    "Explain dependency injection in Android using Dagger/Hilt. Include component scoping, object graph creation, and how circular dependencies are resolved or avoided.",
+    "Discuss memory management in Android, including garbage collection behavior, memory leaks in Activities/Fragments, and how large bitmap handling affects heap pressure.",
+    "Design a real-time event system for a chat application supporting delivery receipts, typing indicators, and offline synchronization.",
+    "Explain how Android handles process death and state restoration. Include savedInstanceState, ViewModel persistence, and implications for navigation stacks.",
+    "Describe how pagination should be implemented in a REST API-backed mobile app. Compare offset-based vs cursor-based pagination and their tradeoffs in distributed systems.",
+    "Explain how logging and analytics pipelines should be structured in a mobile banking application. Include event batching, privacy constraints, and performance considerations.",
+    "Design a modular architecture for a super-app containing fintech, messaging, and e-commerce modules. Explain inter-module communication strategies.",
+    "Explain how ProGuard/R8 optimization works in Android builds. Include shrinking, obfuscation, and impact on reflection-heavy codebases.",
+    "Describe how you would implement a feature flag system in a mobile app with server-driven configuration and gradual rollout support.",
+    "Explain how large-scale apps manage API versioning on the client side while maintaining backward compatibility and avoiding fragmentation."
+  ]
+}

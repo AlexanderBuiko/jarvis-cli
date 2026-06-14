@@ -25,6 +25,8 @@ _PARAM_PARSERS: dict[str, Any] = {
     "max_tokens":        int,
     "seed":              lambda v: None if v.lower() in ("none", "null", "") else int(v),
     "solution_strategy": str,
+    "context_strategy":  str,
+    "window_size":       int,
 }
 
 _PARAM_VALIDATORS: dict[str, tuple] = {
@@ -39,6 +41,14 @@ _PARAM_VALIDATORS: dict[str, tuple] = {
     "solution_strategy": (
         lambda v: v in ("direct", "step_by_step", "prompt_generation", "expert_panel"),
         "solution_strategy must be one of: direct, step_by_step, prompt_generation, expert_panel",
+    ),
+    "context_strategy": (
+        lambda v: v in ("none", "compression", "sliding_window", "sticky_facts", "topics"),
+        "context_strategy must be one of: none, compression, sliding_window, sticky_facts, topics",
+    ),
+    "window_size": (
+        lambda v: v >= 1,
+        "window_size must be at least 1",
     ),
 }
 

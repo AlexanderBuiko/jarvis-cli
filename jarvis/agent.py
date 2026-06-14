@@ -12,15 +12,19 @@ from .prompt_builder.builder import (
     build_strategy_prompt,
     build_prompt_generation_request,
     build_summary_prompt,
+    build_facts_extraction_prompt,
+    build_topic_routing_prompt,
 )
 from .session.store import SessionStore
 from .session.thread_store import ThreadStore
 
 
-# Number of turns that trigger a compression cycle.
+# Compression strategy constants.
 _COMPRESSION_INTERVAL: int = 5
-# Number of most-recent turns always sent verbatim (never compressed).
 _RECENT_TURNS: int = 5
+
+# Default number of turns kept in the sliding-window context.
+_DEFAULT_WINDOW_SIZE: int = 10
 
 
 class JarvisAgent:
@@ -34,6 +38,15 @@ class JarvisAgent:
     Conversation history is organized into named threads. On startup the most
     recently used thread is auto-resumed. New threads can be created and existing
     threads loaded via the history commands.
+
+    Context strategy (set via config context_strategy) controls how history is
+    presented to the model. It may only be changed on an empty thread.
+
+      none          — full history sent verbatim (default)
+      compression   — rolling summary replaces older turns
+      sliding_window — only the most recent N turns are sent
+      sticky_facts  — a structured facts block is prepended to full history
+      topics        — automatic topic routing; context is scoped to the active topic
     """
 
     def __init__(self, client: OpenRouterClient, config_manager: ConfigManager) -> None:
@@ -48,6 +61,7 @@ class JarvisAgent:
                 self._thread_id, self._thread_name, self._history,
                 self._thread_total_tokens, self._thread_total_cost, self._cost_series,
                 self._summary, self._summary_covered_turns,
+                self._facts, self._topic_summaries,
             ) = last
         else:
             self._thread_id, self._thread_name = self._threads.new_thread()
@@ -57,6 +71,8 @@ class JarvisAgent:
             self._cost_series: list = []
             self._summary: str | None = None
             self._summary_covered_turns: int = 0
+            self._facts: str | None = None
+            self._topic_summaries: dict[str, str] = {}
 
         # Prompt tokens from the most recent API call — represents how much of
         # the context window is currently in use (system + full history + last user msg).
@@ -73,6 +89,7 @@ class JarvisAgent:
         then appends both the user turn and assistant response to history.
         """
         params = self._config.runtime
+        strategy = params.get("context_strategy", "none")
         system_prompt = build_system_prompt(params)
         api_calls: list[dict] = []
         generated_prompt: str | None = None
@@ -92,12 +109,19 @@ class JarvisAgent:
         else:
             final_user_message = build_strategy_prompt(params, user_input)
 
-        # system + compressed-or-full history + current (strategy-processed) user turn.
+        # Topics strategy: classify the message into a topic before context assembly
+        # so context can be scoped to the relevant topic's history.
+        active_topic: str | None = None
+        if strategy == "topics":
+            active_topic, routing_record = self._route_to_topic(user_input)
+            api_calls.append(routing_record)
+
+        # system + context-strategy-assembled history + current (strategy-processed) user turn.
         # History stores the original user text; strategy wrapping applies only
         # to the outgoing request and is not persisted in history.
         messages = (
             [{"role": "system", "content": system_prompt}]
-            + self._build_context()
+            + self._build_context(active_topic)
             + [{"role": "user", "content": final_user_message}]
         )
 
@@ -105,8 +129,14 @@ class JarvisAgent:
         response_text = completion.text.strip()
         api_calls.append(_make_call_record(len(api_calls) + 1, "final_answer", completion, self._client))
 
-        self._history.append({"role": "user", "content": user_input})
-        self._history.append({"role": "assistant", "content": response_text})
+        # Persist user/assistant turn; tag with topic when the topics strategy is active.
+        user_msg: dict = {"role": "user", "content": user_input}
+        asst_msg: dict = {"role": "assistant", "content": response_text}
+        if active_topic:
+            user_msg["topic"] = active_topic
+            asst_msg["topic"] = active_topic
+        self._history.append(user_msg)
+        self._history.append(asst_msg)
 
         # Update cumulative token/cost counters from the final API call.
         final_call = api_calls[-1]
@@ -128,18 +158,31 @@ class JarvisAgent:
         # native_ctx stored as 4th element so the context chart can use persisted data.
         self._cost_series.append([turn_index, turn_cost, self._thread_total_cost, native_ctx])
 
-        compression_notice, compression_record = self._maybe_compress()
+        # Account for the topics routing pre-call (runs before the main call in api_calls).
+        if strategy == "topics":
+            routing_call = api_calls[0] if api_calls[0]["label"] == "topic_routing" else None
+            if routing_call:
+                r_tokens = (routing_call["response"].get("usage") or {}).get("total_tokens") or 0
+                r_cost = (routing_call.get("cost") or {}).get("total_usd") or 0.0
+                self._thread_total_tokens += r_tokens
+                self._thread_total_cost += r_cost
+                if self._cost_series:
+                    self._cost_series[-1][1] += r_cost
+                    self._cost_series[-1][2] = self._thread_total_cost
 
-        if compression_record:
-            api_calls.append(compression_record)
-            comp_tokens = (compression_record["response"].get("usage") or {}).get("total_tokens") or 0
-            comp_cost = (compression_record.get("cost") or {}).get("total_usd") or 0.0
-            self._thread_total_tokens += comp_tokens
-            self._thread_total_cost += comp_cost
-            # Roll compression cost into the triggering turn's cost_series entry so
+        # Run context-strategy background work and account for any extra API calls.
+        extra_notice, extra_record = self._run_background_strategy_work(active_topic)
+
+        if extra_record:
+            api_calls.append(extra_record)
+            extra_tokens = (extra_record["response"].get("usage") or {}).get("total_tokens") or 0
+            extra_cost = (extra_record.get("cost") or {}).get("total_usd") or 0.0
+            self._thread_total_tokens += extra_tokens
+            self._thread_total_cost += extra_cost
+            # Roll background cost into the triggering turn's cost_series entry so
             # charts reflect the full cost of operating that turn.
             if self._cost_series:
-                self._cost_series[-1][1] += comp_cost
+                self._cost_series[-1][1] += extra_cost
                 self._cost_series[-1][2] = self._thread_total_cost
 
         self._threads.save(
@@ -151,6 +194,8 @@ class JarvisAgent:
             self._cost_series,
             self._summary,
             self._summary_covered_turns,
+            self._facts,
+            self._topic_summaries,
         )
 
         self._session.add(
@@ -162,8 +207,8 @@ class JarvisAgent:
             generated_prompt=generated_prompt,
         )
 
-        if compression_notice:
-            return f"{response_text}\n\n{compression_notice}"
+        if extra_notice:
+            return f"{response_text}\n\n{extra_notice}"
         return response_text
 
     def reset_history(self) -> None:
@@ -175,6 +220,8 @@ class JarvisAgent:
         self._last_context_tokens = 0
         self._summary = None
         self._summary_covered_turns = 0
+        self._facts = None
+        self._topic_summaries = {}
         self._threads.save(self._thread_id, self._thread_name, self._history)
 
     def new_thread(self, name: str | None = None) -> str:
@@ -187,6 +234,8 @@ class JarvisAgent:
         self._last_context_tokens = 0
         self._summary = None
         self._summary_covered_turns = 0
+        self._facts = None
+        self._topic_summaries = {}
         return self._thread_name
 
     def load_thread(self, query: str) -> bool:
@@ -201,10 +250,16 @@ class JarvisAgent:
             self._thread_id, self._thread_name, self._history,
             self._thread_total_tokens, self._thread_total_cost, self._cost_series,
             self._summary, self._summary_covered_turns,
+            self._facts, self._topic_summaries,
         ) = result
         self._last_context_tokens = 0  # unknown until the next API call in this session
         # Touch the file so it becomes the new "last used" thread.
-        self._threads.save(self._thread_id, self._thread_name, self._history, self._thread_total_tokens, self._thread_total_cost, self._cost_series, self._summary, self._summary_covered_turns)
+        self._threads.save(
+            self._thread_id, self._thread_name, self._history,
+            self._thread_total_tokens, self._thread_total_cost, self._cost_series,
+            self._summary, self._summary_covered_turns,
+            self._facts, self._topic_summaries,
+        )
         return True
 
     def delete_thread(self, query: str) -> str:
@@ -228,8 +283,14 @@ class JarvisAgent:
                     self._thread_id, self._thread_name, self._history,
                     self._thread_total_tokens, self._thread_total_cost, self._cost_series,
                     self._summary, self._summary_covered_turns,
+                    self._facts, self._topic_summaries,
                 ) = last
-                self._threads.save(self._thread_id, self._thread_name, self._history, self._thread_total_tokens, self._thread_total_cost, self._cost_series, self._summary, self._summary_covered_turns)
+                self._threads.save(
+                    self._thread_id, self._thread_name, self._history,
+                    self._thread_total_tokens, self._thread_total_cost, self._cost_series,
+                    self._summary, self._summary_covered_turns,
+                    self._facts, self._topic_summaries,
+                )
                 return (
                     f"Thread '{target_name}' deleted. "
                     f"Switched to '{self._thread_name}'."
@@ -243,6 +304,8 @@ class JarvisAgent:
                 self._last_context_tokens = 0
                 self._summary = None
                 self._summary_covered_turns = 0
+                self._facts = None
+                self._topic_summaries = {}
                 return (
                     f"Thread '{target_name}' deleted. "
                     f"Started new thread '{self._thread_name}'."
@@ -253,7 +316,12 @@ class JarvisAgent:
     def rename_thread(self, new_name: str) -> str:
         """Rename the active thread. Returns the new name."""
         self._thread_name = new_name
-        self._threads.rename(self._thread_id, self._thread_name, self._history, self._thread_total_tokens, self._thread_total_cost, self._cost_series, self._summary, self._summary_covered_turns)
+        self._threads.rename(
+            self._thread_id, self._thread_name, self._history,
+            self._thread_total_tokens, self._thread_total_cost, self._cost_series,
+            self._summary, self._summary_covered_turns,
+            self._facts, self._topic_summaries,
+        )
         return self._thread_name
 
     def list_threads(self) -> list[dict]:
@@ -306,6 +374,16 @@ class JarvisAgent:
         """Number of turns currently captured by the rolling summary."""
         return self._summary_covered_turns
 
+    @property
+    def facts(self) -> str | None:
+        """Current sticky facts text, or None if no facts have been extracted."""
+        return self._facts
+
+    @property
+    def topic_summaries(self) -> dict[str, str]:
+        """Current per-topic summaries dict. Empty if the topics strategy has not run."""
+        return dict(self._topic_summaries)
+
     def get_context_window(self, model_id: str) -> int | None:
         return self._client.get_context_window(model_id)
 
@@ -315,15 +393,27 @@ class JarvisAgent:
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
-    def _build_context(self) -> list[dict]:
+    def _build_context(self, active_topic: str | None = None) -> list[dict]:
         """Return the message list to include in the next API request.
 
-        When a summary exists, replaces the covered portion of history with a
-        synthetic exchange that presents the summary to the model, followed by
-        the verbatim recent tail.
+        Dispatches to the appropriate assembly method based on the active
+        context strategy. Defaults to full history when no strategy is set.
         """
+        strategy = self._config.runtime.get("context_strategy", "none")
+        if strategy == "compression":
+            return self._build_compressed_context()
+        if strategy == "sliding_window":
+            return self._build_windowed_context()
+        if strategy == "sticky_facts":
+            return self._build_facts_context()
+        if strategy == "topics":
+            return self._build_topic_context(active_topic)
+        return list(self._history)
+
+    def _build_compressed_context(self) -> list[dict]:
+        """Return history with older turns replaced by a rolling summary block."""
         if self._summary is None or self._summary_covered_turns == 0:
-            return self._history
+            return list(self._history)
 
         recent = self._history[self._summary_covered_turns * 2:]
         summary_block = [
@@ -340,6 +430,73 @@ class JarvisAgent:
             },
         ]
         return summary_block + recent
+
+    def _build_windowed_context(self) -> list[dict]:
+        """Return only the most recent N turns of history."""
+        window = self._config.runtime.get("window_size", _DEFAULT_WINDOW_SIZE)
+        return self._history[max(0, len(self._history) - window * 2):]
+
+    def _build_facts_context(self) -> list[dict]:
+        """Return full history prefixed with a structured facts block."""
+        if not self._facts:
+            return list(self._history)
+        facts_block = [
+            {
+                "role": "user",
+                "content": f"[Conversation facts]\n{self._facts}",
+            },
+            {
+                "role": "assistant",
+                "content": "Understood, I have noted these facts.",
+            },
+        ]
+        return facts_block + self._history
+
+    def _build_topic_context(self, active_topic: str | None) -> list[dict]:
+        """Return only the messages belonging to the active topic, with its summary block."""
+        if not active_topic:
+            return list(self._history)
+
+        topic_messages = [
+            {"role": m["role"], "content": m["content"]}
+            for m in self._history
+            if m.get("topic") == active_topic
+        ]
+
+        existing_summary = self._topic_summaries.get(active_topic)
+        if not existing_summary:
+            return topic_messages
+
+        summary_block = [
+            {
+                "role": "user",
+                "content": f"[Topic summary — {active_topic}]\n{existing_summary}",
+            },
+            {
+                "role": "assistant",
+                "content": "Understood, I have the context from our earlier discussion on this topic.",
+            },
+        ]
+        return summary_block + topic_messages
+
+    def _run_background_strategy_work(
+        self, active_topic: str | None = None
+    ) -> tuple[str | None, dict | None]:
+        """Run any post-turn background work required by the active context strategy.
+
+        Returns (notice_string, api_call_record) when a background call was made,
+        or (None, None) when no background work is needed.
+        """
+        strategy = self._config.runtime.get("context_strategy", "none")
+        if strategy == "compression":
+            return self._maybe_compress()
+        if strategy == "sticky_facts":
+            record = self._update_facts()
+            return None, record
+        if strategy == "topics" and active_topic:
+            record = self._update_topic_summary(active_topic)
+            return None, record
+        return None, None
 
     def _maybe_compress(self) -> tuple[str | None, dict | None]:
         """Trigger a rolling compression cycle if the threshold has been reached.
@@ -362,7 +519,7 @@ class JarvisAgent:
         if not new_chunk:
             return None, None
 
-        summary_text, completion = self._generate_summary(new_chunk)
+        summary_text, completion = self._generate_summary(self._summary, new_chunk)
         self._summary = summary_text
         self._summary_covered_turns = turns_to_cover
         record = _make_call_record(0, "context_compression", completion, self._client)
@@ -372,14 +529,52 @@ class JarvisAgent:
         )
         return notice, record
 
-    def _generate_summary(self, new_chunk: list[dict]) -> tuple[str, "Completion"]:
+    def _generate_summary(
+        self, existing_summary: str | None, new_chunk: list[dict]
+    ) -> tuple[str, "Completion"]:
         """Call the LLM to produce an updated rolling summary."""
-        prompt = build_summary_prompt(self._summary, new_chunk)
+        prompt = build_summary_prompt(existing_summary, new_chunk)
         params: dict = {}
         if "model" in self._config.runtime:
             params["model"] = self._config.runtime["model"]
         completion = self._client.complete([{"role": "user", "content": prompt}], params)
         return completion.text.strip(), completion
+
+    def _update_facts(self) -> dict | None:
+        """Call the LLM to update the sticky facts after each turn."""
+        latest_exchange = self._history[-2:]
+        prompt = build_facts_extraction_prompt(self._facts, latest_exchange)
+        params: dict = {}
+        if "model" in self._config.runtime:
+            params["model"] = self._config.runtime["model"]
+        completion = self._client.complete([{"role": "user", "content": prompt}], params)
+        self._facts = completion.text.strip()
+        return _make_call_record(0, "facts_extraction", completion, self._client)
+
+    def _route_to_topic(self, user_input: str) -> tuple[str, dict]:
+        """Call the LLM to determine which topic this message belongs to.
+
+        Returns (topic_name, call_record). Creates a new topic name when no
+        existing topic matches.
+        """
+        prompt = build_topic_routing_prompt(user_input, self._topic_summaries)
+        params: dict = {}
+        if "model" in self._config.runtime:
+            params["model"] = self._config.runtime["model"]
+        completion = self._client.complete([{"role": "user", "content": prompt}], params)
+        topic = completion.text.strip().lower().replace(" ", "-")
+        record = _make_call_record(0, "topic_routing", completion, self._client)
+        return topic, record
+
+    def _update_topic_summary(self, topic: str) -> dict | None:
+        """Eagerly update the summary for the given topic after each turn."""
+        latest_exchange = [m for m in self._history[-2:] if m.get("topic") == topic]
+        if not latest_exchange:
+            return None
+        existing_summary = self._topic_summaries.get(topic)
+        summary_text, completion = self._generate_summary(existing_summary, latest_exchange)
+        self._topic_summaries[topic] = summary_text
+        return _make_call_record(0, "topic_summary_update", completion, self._client)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
