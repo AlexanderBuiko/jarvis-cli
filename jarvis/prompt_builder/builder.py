@@ -29,11 +29,62 @@ _EXPERT_PANEL_INSTRUCTION = (
 )
 
 
-def build_system_prompt(params: dict[str, Any]) -> str:
+# Stage transitions are controlled explicitly by the user via `task next` /
+# `task back`; the agent only does the work of the current stage and never moves
+# stages itself (deterministic, code-enforced control). Each stage describes its
+# job and tells the user how to proceed when they are ready.
+_TASK_STAGE_INSTRUCTIONS: dict[str, str] = {
+    "clarification": (
+        "The active task is in the CLARIFICATION stage. Make sure the goal, success criteria, "
+        "scope, and constraints are clear. Ask clarifying questions ONLY about details that are "
+        "genuinely missing or ambiguous — do not ask about things the user already specified or "
+        "that have a sensible default. When you believe you understand the task, briefly restate "
+        "your understanding and tell the user to run `task next` when they are ready to plan."
+    ),
+    "planning": (
+        "The active task is in the PLANNING stage. Produce a concrete, ordered plan that would "
+        "complete the task. Present the plan and invite the user to adjust it; tell them to run "
+        "`task next` when they approve it and want to start execution."
+    ),
+    "execution": (
+        "The active task is in the EXECUTION stage. Carry out the plan: present the work (e.g. the "
+        "problems to solve) and respond to the user's results as they come. When the planned work "
+        "is finished, tell the user to run `task next` to move to validation."
+    ),
+    "validation": (
+        "The active task is in the VALIDATION stage. Verify the result against the plan and the "
+        "success criteria. If the criteria are met, tell the user to run `task next` to finish the "
+        "task. If they are not met, explain what is wrong and tell the user to run `task back` to "
+        "return to execution."
+    ),
+    "done": (
+        "The active task is DONE. Provide a brief closing summary if useful."
+    ),
+}
+
+_TASK_CONTROL_NOTE = (
+    "Stage control: you must NOT change the task stage yourself and must not claim a stage is "
+    "switched. Stage transitions happen only when the user runs `task next` (forward) or "
+    "`task back` (validation → execution). Just do the current stage's work and, when ready, tell "
+    "the user which command to run."
+)
+
+
+def build_system_prompt(
+    params: dict[str, Any],
+    task: dict[str, Any] | None = None,
+    loaded_memory: dict[str, str] | None = None,
+    profile: str | None = None,
+    invariants: str | None = None,
+) -> str:
     """Return the system prompt for the current configuration.
 
-    step_by_step and expert_panel strategies append additional instructions
-    to the base agent prompt.
+    Assembly order (the mentor's "explicitly decide what to add"):
+      base → solution-strategy → always-on profile → always-on invariants →
+      current task stage role → on-demand loaded memory.
+
+    profile and invariants come from the always-on long-term-memory files and
+    are included on every request; loaded_memory holds on-demand files.
     """
     parts = [_BASE_SYSTEM_PROMPT]
 
@@ -43,7 +94,69 @@ def build_system_prompt(params: dict[str, Any]) -> str:
     elif strategy == "expert_panel":
         parts.append(_EXPERT_PANEL_INSTRUCTION)
 
+    if profile and profile.strip():
+        parts.append(f"[User Profile — style, constraints, context]\n{profile.strip()}")
+
+    if invariants and invariants.strip():
+        parts.append(
+            "[Invariants — hard rules you MUST NOT violate under any circumstances, even if the "
+            f"user asks]\n{invariants.strip()}"
+        )
+
+    if task is not None:
+        stage = task.get("stage", "clarification")
+        stage_instruction = _TASK_STAGE_INSTRUCTIONS.get(stage)
+        if stage_instruction:
+            parts.append(stage_instruction)
+        if stage != "done":
+            parts.append(_TASK_CONTROL_NOTE)
+
+    if loaded_memory:
+        for name, content in loaded_memory.items():
+            parts.append(f"[Long-Term Memory — {name}]\n{content.strip()}")
+
     return "\n\n".join(parts)
+
+
+def build_working_memory_block(task: dict[str, Any]) -> list[dict]:
+    """Return a pseudo-exchange describing the current task state.
+
+    Injected ahead of the conversation history so the model always sees the
+    task's stage, plan, and progress without the user repeating it. Lives
+    outside the message history, so it survives compression and thread switches.
+    """
+    lines = [
+        f"[Working Memory — Task: {task.get('name', '')}]",
+        f"Stage: {task.get('stage', '')}",
+    ]
+    if task.get("description"):
+        lines.append(f"Description: {task['description']}")
+    if task.get("plan"):
+        lines.append("Plan:")
+        lines.append(task["plan"])
+    if task.get("completed"):
+        lines.append("Completed:")
+        lines += [f"  - {item}" for item in task["completed"]]
+    if task.get("remaining"):
+        lines.append("Remaining:")
+        lines += [f"  - {item}" for item in task["remaining"]]
+    if task.get("notes"):
+        lines.append(f"Notes: {task['notes']}")
+
+    # Results recorded as each stage completed. This is the durable task context
+    # that lets work resume in a different thread (where the chat history is gone).
+    outputs = task.get("stage_outputs") or {}
+    ordered = [s for s in ("clarification", "planning", "execution", "validation") if s in outputs]
+    if ordered:
+        lines.append("Results from completed stages:")
+        for stage in ordered:
+            lines.append(f"  [{stage}]")
+            lines += [f"    {ln}" for ln in outputs[stage].splitlines()]
+
+    return [
+        {"role": "user", "content": "\n".join(lines)},
+        {"role": "assistant", "content": "Understood, I have the current task context."},
+    ]
 
 
 def build_strategy_prompt(params: dict[str, Any], user_request: str) -> str:
@@ -74,6 +187,36 @@ def build_strategy_prompt(params: dict[str, Any], user_request: str) -> str:
         )
 
     return user_request
+
+
+def build_invariant_check_prompt(invariants: str, response_text: str) -> str:
+    """Build the prompt that checks a reply against the invariant list.
+
+    Acts as a "linter for requirements expressed in natural language": the model
+    must answer with exactly OK when the reply violates nothing, or list the
+    concrete violations otherwise.
+    """
+    return (
+        "You are a strict compliance checker. Below is a list of INVARIANTS (hard rules) and an "
+        "ASSISTANT REPLY. Determine whether the reply violates any invariant.\n\n"
+        f"INVARIANTS:\n{invariants.strip()}\n\n"
+        f"ASSISTANT REPLY:\n{response_text.strip()}\n\n"
+        "If the reply violates no invariant, respond with exactly: OK\n"
+        "Otherwise, list each violation on its own line as '- <which invariant> : <how it is "
+        "violated>'. Output only OK or the violation list, with no other commentary."
+    )
+
+
+def build_invariant_rework_prompt(invariants: str, response_text: str, violations: str) -> str:
+    """Build the prompt asking the agent to rewrite a reply to satisfy invariants."""
+    return (
+        "Your previous reply violated one or more invariants (hard rules). Rewrite it so it fully "
+        "satisfies every invariant while still addressing the user's request. Do not mention the "
+        "invariants, the violations, or this correction — output only the corrected reply.\n\n"
+        f"INVARIANTS:\n{invariants.strip()}\n\n"
+        f"VIOLATIONS FOUND:\n{violations.strip()}\n\n"
+        f"YOUR PREVIOUS REPLY:\n{response_text.strip()}"
+    )
 
 
 def build_summary_prompt(existing_summary: str | None, new_messages: list[dict]) -> str:

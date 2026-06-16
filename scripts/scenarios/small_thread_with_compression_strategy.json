@@ -1,0 +1,18 @@
+{
+  "thread": "small_thread_with_compression_strategy",
+  "config": {
+    "model": "openai/gpt-3.5-turbo",
+    "seed": 42,
+    "context_strategy": "compression"
+  },
+  "messages": [
+    "1. I want to learn Android architecture patterns.",
+    "2. Also, I’m thinking about switching jobs to Europe, what should I prepare?",
+    "3. What is Clean Architecture exactly?",
+    "4. By the way, how do I reduce taxes when relocating?",
+    "5. Can you explain MVVM with an example?",
+    "6. I need help preparing my CV.",
+    "7. What’s the difference between MVI and MVVM?",
+    "8. Should I learn Kotlin coroutines or RxJava first?"
+  ]
+}

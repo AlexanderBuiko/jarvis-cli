@@ -26,6 +26,25 @@ from .commands import (
     handle_session_chat,
     handle_session_summary,
     handle_session_api,
+    handle_task_show,
+    handle_task_new,
+    handle_task_list,
+    handle_task_start,
+    handle_task_next,
+    handle_task_back,
+    handle_task_pause,
+    handle_task_delete,
+    handle_task_done,
+    handle_task_todo,
+    handle_memory_list,
+    handle_memory_init,
+    handle_memory_edit,
+    handle_memory_show,
+    handle_memory_load,
+    handle_memory_unload,
+    handle_memory_write,
+    handle_memory_append,
+    handle_memory_delete,
 )
 from .input import InputController
 from ..agent import JarvisAgent
@@ -132,6 +151,56 @@ def _dispatch(
             ctx = agent.get_context_window(model)
             return handle_thread_summary(agent, ctx)
         return "Usage: thread | thread clear | thread load [<name-or-id>] | thread new [name] | thread rename <name> | thread delete <name-or-id> | thread summary"
+
+    if cmd == "task":
+        if not args:
+            return handle_task_show(agent)
+        sub = args[0].lower()
+        if sub == "new":
+            return handle_task_new(args[1:], agent)
+        if sub == "list":
+            return handle_task_list(agent)
+        if sub == "show":
+            return handle_task_show(agent)
+        if sub == "start":
+            return handle_task_start(args[1:], agent)
+        if sub == "next":
+            return handle_task_next(agent)
+        if sub == "back":
+            return handle_task_back(agent)
+        if sub == "pause":
+            return handle_task_pause(agent)
+        if sub == "delete":
+            return handle_task_delete(args[1:], agent)
+        if sub == "done":
+            return handle_task_done(args[1:], agent)
+        if sub == "todo":
+            return handle_task_todo(args[1:], agent)
+        return "Usage: task | task new [name] | task list | task start <name-or-id> | task next | task back | task pause | task delete <name-or-id> | task done <item> | task todo <item>"
+
+    if cmd == "memory":
+        if not args:
+            return handle_memory_list(agent)
+        sub = args[0].lower()
+        if sub == "list":
+            return handle_memory_list(agent)
+        if sub == "init":
+            return handle_memory_init(agent)
+        if sub == "edit":
+            return handle_memory_edit(args[1:], agent)
+        if sub == "show":
+            return handle_memory_show(args[1:], agent)
+        if sub == "load":
+            return handle_memory_load(args[1:], agent)
+        if sub == "unload":
+            return handle_memory_unload(args[1:], agent)
+        if sub == "write":
+            return handle_memory_write(args[1:], agent)
+        if sub == "append":
+            return handle_memory_append(args[1:], agent)
+        if sub == "delete":
+            return handle_memory_delete(args[1:], agent)
+        return "Usage: memory | memory init | memory edit <name> | memory show <name> | memory load <name> | memory unload <name> | memory write <name> <text> | memory append <name> <text> | memory delete <name>"
 
     if cmd == "session":
         if args:

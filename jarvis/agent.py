@@ -10,13 +10,20 @@ from .openrouter.client import DEFAULT_MODEL, OpenRouterClient, Completion
 from .prompt_builder.builder import (
     build_system_prompt,
     build_strategy_prompt,
+    build_working_memory_block,
     build_prompt_generation_request,
     build_summary_prompt,
     build_facts_extraction_prompt,
     build_topic_routing_prompt,
+    build_invariant_check_prompt,
+    build_invariant_rework_prompt,
 )
 from .session.store import SessionStore
 from .session.thread_store import ThreadStore
+from .session.task_store import TaskStore
+from .session.long_term_memory import LongTermMemory
+
+
 
 
 # Compression strategy constants.
@@ -25,6 +32,20 @@ _RECENT_TURNS: int = 5
 
 # Default number of turns kept in the sliding-window context.
 _DEFAULT_WINDOW_SIZE: int = 10
+
+# API-call labels that count as the user-facing answer (for context-fill metric).
+_ANSWER_LABELS: frozenset[str] = frozenset({"final_answer", "invariant_rework"})
+
+# Opening instruction generated when the user advances into a stage (`task next`),
+# so the new stage's work appears immediately without a separate user message.
+_STAGE_ENTRY_PROMPTS: dict[str, str] = {
+    "planning": "I'm ready to plan. Please produce the plan for this task.",
+    "execution": "The plan is approved. Let's begin execution — present the first step.",
+    "validation": "Execution is complete. Let's validate the result against the success criteria.",
+    "done": "The task is finished. Please give a brief closing summary.",
+}
+# Opening instruction for `task back` (validation → execution).
+_BACK_ENTRY_PROMPT: str = "Let's return to execution and keep working."
 
 
 class JarvisAgent:
@@ -54,6 +75,13 @@ class JarvisAgent:
         self._config = config_manager
         self._threads = ThreadStore()
         self._threads.migrate_legacy()
+        self._tasks = TaskStore()
+        self._memory = LongTermMemory()
+
+        # Working-memory task linked to the active thread (None when unlinked).
+        self._active_task: dict | None = None
+        # Long-term memory files explicitly loaded for this session (name -> content).
+        self._loaded_memory: dict[str, str] = {}
 
         last = self._threads.load_last()
         if last:
@@ -79,6 +107,7 @@ class JarvisAgent:
         self._last_context_tokens: int = 0
 
         self._session = SessionStore()
+        self._load_active_task()
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -90,9 +119,15 @@ class JarvisAgent:
         """
         params = self._config.runtime
         strategy = params.get("context_strategy", "none")
-        system_prompt = build_system_prompt(params)
         api_calls: list[dict] = []
         generated_prompt: str | None = None
+
+        # Always-on long-term memory: profile + invariants go into every system
+        # prompt. Task stage instructions and on-demand loaded memory are added too.
+        profile, invariants = self._always_on_memory()
+        system_prompt = build_system_prompt(
+            params, self._active_task, self._loaded_memory, profile, invariants
+        )
 
         if params.get("solution_strategy") == "prompt_generation":
             # Two-stage pipeline: stage 1 generates an optimised prompt for the
@@ -104,7 +139,7 @@ class JarvisAgent:
             stage1_params = {"model": params["model"]} if "model" in params else {}
             stage1 = self._client.complete(stage1_messages, stage1_params)
             generated_prompt = stage1.text.strip()
-            api_calls.append(_make_call_record(1, "prompt_generation_stage1", stage1, self._client))
+            api_calls.append(_make_call_record(len(api_calls) + 1, "prompt_generation_stage1", stage1, self._client))
             final_user_message = generated_prompt
         else:
             final_user_message = build_strategy_prompt(params, user_input)
@@ -116,11 +151,13 @@ class JarvisAgent:
             active_topic, routing_record = self._route_to_topic(user_input)
             api_calls.append(routing_record)
 
-        # system + context-strategy-assembled history + current (strategy-processed) user turn.
-        # History stores the original user text; strategy wrapping applies only
-        # to the outgoing request and is not persisted in history.
+        # system + working-memory block + context-strategy history + user turn.
+        # The WM block (current task state) is injected ahead of history so it
+        # survives compression and thread switches.
+        wm_block = build_working_memory_block(self._active_task) if self._active_task else []
         messages = (
             [{"role": "system", "content": system_prompt}]
+            + wm_block
             + self._build_context(active_topic)
             + [{"role": "user", "content": final_user_message}]
         )
@@ -128,6 +165,14 @@ class JarvisAgent:
         completion = self._client.complete(messages, params)
         response_text = completion.text.strip()
         api_calls.append(_make_call_record(len(api_calls) + 1, "final_answer", completion, self._client))
+
+        # Invariant validation (the "requirements linter"): when invariants are
+        # defined, check the reply in code and rework it once on a violation.
+        invariant_notice: str | None = None
+        if invariants:
+            response_text, invariant_notice, completion = self._validate_invariants(
+                invariants, messages, response_text, completion, params, api_calls
+            )
 
         # Persist user/assistant turn; tag with topic when the topics strategy is active.
         user_msg: dict = {"role": "user", "content": user_input}
@@ -138,52 +183,27 @@ class JarvisAgent:
         self._history.append(user_msg)
         self._history.append(asst_msg)
 
-        # Update cumulative token/cost counters from the final API call.
-        final_call = api_calls[-1]
-        usage = final_call["response"].get("usage") or {}
+        # Context-strategy background work (compression / facts / topic summaries).
+        extra_notice, extra_record = self._run_background_strategy_work(active_topic)
+        if extra_record:
+            api_calls.append(extra_record)
 
+        # Accounting: every LLM call this turn is billed; the last answer-type
+        # call reflects the shown response and its context-window fill.
+        answer_calls = [c for c in api_calls if c["label"] in _ANSWER_LABELS]
+        last_usage = (answer_calls or api_calls)[-1]["response"].get("usage") or {}
         # native_tokens_total is the model-side count after chat-template expansion;
-        # it matches what the model's context-limit check uses and is more accurate
-        # than total_tokens (OpenRouter's pre-template estimate).
-        # Falls back to total_tokens when the provider does not return native counts.
-        native_ctx: int | None = usage.get("native_tokens_total") or usage.get("total_tokens") or None
+        # falls back to total_tokens when the provider does not return native counts.
+        native_ctx: int | None = last_usage.get("native_tokens_total") or last_usage.get("total_tokens") or None
         self._last_context_tokens = native_ctx or 0
 
-        # total_tokens (billing metric) is used for the cumulative billing counter.
-        billing_tokens = usage.get("total_tokens") or 0
-        turn_cost = (final_call.get("cost") or {}).get("total_usd") or 0.0
+        billing_tokens = sum((c["response"].get("usage") or {}).get("total_tokens") or 0 for c in api_calls)
+        turn_cost = sum((c.get("cost") or {}).get("total_usd") or 0.0 for c in api_calls)
         self._thread_total_tokens += billing_tokens
         self._thread_total_cost += turn_cost
         turn_index = len(self._history) // 2
         # native_ctx stored as 4th element so the context chart can use persisted data.
         self._cost_series.append([turn_index, turn_cost, self._thread_total_cost, native_ctx])
-
-        # Account for the topics routing pre-call (runs before the main call in api_calls).
-        if strategy == "topics":
-            routing_call = api_calls[0] if api_calls[0]["label"] == "topic_routing" else None
-            if routing_call:
-                r_tokens = (routing_call["response"].get("usage") or {}).get("total_tokens") or 0
-                r_cost = (routing_call.get("cost") or {}).get("total_usd") or 0.0
-                self._thread_total_tokens += r_tokens
-                self._thread_total_cost += r_cost
-                if self._cost_series:
-                    self._cost_series[-1][1] += r_cost
-                    self._cost_series[-1][2] = self._thread_total_cost
-
-        # Run context-strategy background work and account for any extra API calls.
-        extra_notice, extra_record = self._run_background_strategy_work(active_topic)
-
-        if extra_record:
-            api_calls.append(extra_record)
-            extra_tokens = (extra_record["response"].get("usage") or {}).get("total_tokens") or 0
-            extra_cost = (extra_record.get("cost") or {}).get("total_usd") or 0.0
-            self._thread_total_tokens += extra_tokens
-            self._thread_total_cost += extra_cost
-            # Roll background cost into the triggering turn's cost_series entry so
-            # charts reflect the full cost of operating that turn.
-            if self._cost_series:
-                self._cost_series[-1][1] += extra_cost
-                self._cost_series[-1][2] = self._thread_total_cost
 
         self._threads.save(
             self._thread_id,
@@ -207,9 +227,12 @@ class JarvisAgent:
             generated_prompt=generated_prompt,
         )
 
+        parts = [response_text]
+        if invariant_notice:
+            parts.append(invariant_notice)
         if extra_notice:
-            return f"{response_text}\n\n{extra_notice}"
-        return response_text
+            parts.append(extra_notice)
+        return "\n\n".join(parts)
 
     def reset_history(self) -> None:
         """Clear the active thread's messages (thread record is preserved)."""
@@ -236,6 +259,7 @@ class JarvisAgent:
         self._summary_covered_turns = 0
         self._facts = None
         self._topic_summaries = {}
+        self._load_active_task()
         return self._thread_name
 
     def load_thread(self, query: str) -> bool:
@@ -260,6 +284,7 @@ class JarvisAgent:
             self._summary, self._summary_covered_turns,
             self._facts, self._topic_summaries,
         )
+        self._load_active_task()
         return True
 
     def delete_thread(self, query: str) -> str:
@@ -291,6 +316,7 @@ class JarvisAgent:
                     self._summary, self._summary_covered_turns,
                     self._facts, self._topic_summaries,
                 )
+                self._load_active_task()
                 return (
                     f"Thread '{target_name}' deleted. "
                     f"Switched to '{self._thread_name}'."
@@ -306,6 +332,7 @@ class JarvisAgent:
                 self._summary_covered_turns = 0
                 self._facts = None
                 self._topic_summaries = {}
+                self._load_active_task()
                 return (
                     f"Thread '{target_name}' deleted. "
                     f"Started new thread '{self._thread_name}'."
@@ -384,6 +411,171 @@ class JarvisAgent:
         """Current per-topic summaries dict. Empty if the topics strategy has not run."""
         return dict(self._topic_summaries)
 
+    # ── Working memory (tasks) ─────────────────────────────────────────────────
+
+    @property
+    def active_task(self) -> dict | None:
+        """The working-memory task linked to the active thread, or None."""
+        return dict(self._active_task) if self._active_task else None
+
+    def create_task(self, name: str | None = None) -> dict:
+        """Create a task, link it to the active thread, and make it active."""
+        task = self._tasks.new_task(name)
+        task["thread_ids"] = [self._thread_id]
+        self._tasks.save(task)
+        self._threads.set_active_task(self._thread_id, task["id"])
+        self._active_task = task
+        return task
+
+    def start_task(self, query: str) -> dict | None:
+        """Link an existing task to the active thread and make it active."""
+        task = self._tasks.find(query)
+        if task is None:
+            return None
+        if self._thread_id not in task["thread_ids"]:
+            task["thread_ids"].append(self._thread_id)
+            self._tasks.save(task)
+        self._threads.set_active_task(self._thread_id, task["id"])
+        self._active_task = task
+        return task
+
+    def pause_task(self) -> str | None:
+        """Unlink the active task from the thread (the task file is preserved)."""
+        if self._active_task is None:
+            return None
+        name = self._active_task["name"]
+        self._threads.set_active_task(self._thread_id, None)
+        self._active_task = None
+        return name
+
+    def delete_task(self, query: str) -> str | None:
+        """Delete a task file. Unlinks it from the active thread if it was active."""
+        task = self._tasks.find(query)
+        if task is None:
+            return None
+        self._tasks.delete(task["id"])
+        if self._active_task and self._active_task["id"] == task["id"]:
+            self._threads.set_active_task(self._thread_id, None)
+            self._active_task = None
+        return task["name"]
+
+    def list_tasks(self) -> list[dict]:
+        return self._tasks.list_all()
+
+    def next_stage(self) -> tuple[str | None, str]:
+        """Advance the active task to the next forward stage and continue.
+
+        Deterministic, user-driven (`task next`). Records the leaving stage's
+        result, advances in code (ALLOWED_TRANSITIONS enforced), then generates
+        the new stage's opening reply. Returns (new_stage, reply_or_error).
+        """
+        return self._move_stage(None)
+
+    def back_stage(self) -> tuple[str | None, str]:
+        """Return a validation task to execution and continue (`task back`)."""
+        return self._move_stage("execution")
+
+    def _move_stage(self, target: str | None) -> tuple[str | None, str]:
+        if self._active_task is None:
+            return None, "No active task."
+        current = self._active_task["stage"]
+        # Record the leaving stage's result (last assistant message), and promote
+        # the key results into the canonical task fields so they appear in
+        # `task show` and carry to other threads — no extra LLM call needed.
+        last_asst = next(
+            (m["content"] for m in reversed(self._history) if m["role"] == "assistant"),
+            None,
+        )
+        if last_asst:
+            self._active_task.setdefault("stage_outputs", {})[current] = last_asst
+            if current == "clarification" and not self._active_task.get("description"):
+                self._active_task["description"] = last_asst
+            elif current == "planning":
+                self._active_task["plan"] = last_asst
+        try:
+            new_stage = self._tasks.advance_stage(self._active_task, target)
+        except ValueError as exc:
+            return None, f"Cannot move: {exc}."
+        # Generate the new stage's opening reply in the same step (advance + continue).
+        entry = _BACK_ENTRY_PROMPT if target == "execution" else _STAGE_ENTRY_PROMPTS.get(new_stage, "Continue.")
+        reply = self.chat(entry)
+        return new_stage, reply
+
+    def add_completed(self, item: str) -> bool:
+        """Record a completed item on the active task. Returns False if no task."""
+        if self._active_task is None:
+            return False
+        self._active_task.setdefault("completed", []).append(item)
+        # Drop a matching remaining item if present.
+        self._active_task["remaining"] = [
+            r for r in self._active_task.get("remaining", []) if r != item
+        ]
+        self._tasks.save(self._active_task)
+        return True
+
+    def add_remaining(self, item: str) -> bool:
+        """Record a pending item on the active task. Returns False if no task."""
+        if self._active_task is None:
+            return False
+        self._active_task.setdefault("remaining", []).append(item)
+        self._tasks.save(self._active_task)
+        return True
+
+    # ── Long-term memory ───────────────────────────────────────────────────────
+
+    @property
+    def loaded_memory(self) -> dict[str, str]:
+        return dict(self._loaded_memory)
+
+    def list_memory(self) -> list[str]:
+        return self._memory.list_files()
+
+    def read_memory(self, name: str) -> str | None:
+        return self._memory.read(name)
+
+    def load_memory(self, name: str) -> str | None:
+        """Load a memory file into the session so it is injected into requests."""
+        name = self._memory.normalize(name)
+        content = self._memory.read(name)
+        if content is None:
+            return None
+        self._loaded_memory[name] = content
+        return name
+
+    def unload_memory(self, name: str) -> bool:
+        return self._loaded_memory.pop(self._memory.normalize(name), None) is not None
+
+    def write_memory(self, name: str, content: str) -> None:
+        """Create or overwrite a memory file (refreshing it if currently loaded)."""
+        name = self._memory.normalize(name)
+        self._memory.write(name, content)
+        if name in self._loaded_memory:
+            self._loaded_memory[name] = content
+
+    def append_memory(self, name: str, line: str) -> None:
+        name = self._memory.normalize(name)
+        self._memory.append(name, line)
+        if name in self._loaded_memory:
+            self._loaded_memory[name] = self._memory.read(name) or ""
+
+    def delete_memory(self, name: str) -> bool:
+        name = self._memory.normalize(name)
+        self._loaded_memory.pop(name, None)
+        return self._memory.delete(name)
+
+    def init_memory(self) -> list[str]:
+        """Scaffold the always-on memory files (profile, invariants) if missing."""
+        return self._memory.init_always_on()
+
+    def memory_path(self, name: str):
+        """Filesystem path of a memory file (for editing in $EDITOR)."""
+        return self._memory.path_for(name)
+
+    def refresh_memory(self, name: str) -> None:
+        """Re-read a memory file from disk (after an external edit) if it is loaded."""
+        if name in self._loaded_memory:
+            self._loaded_memory[name] = self._memory.read(name) or ""
+
     def get_context_window(self, model_id: str) -> int | None:
         return self._client.get_context_window(model_id)
 
@@ -392,6 +584,47 @@ class JarvisAgent:
         return self._session
 
     # ── Private helpers ───────────────────────────────────────────────────────
+
+    def _load_active_task(self) -> None:
+        """Load the working-memory task linked to the active thread, if any."""
+        task_id = self._threads.get_active_task_id(self._thread_id)
+        self._active_task = self._tasks.load(task_id) if task_id else None
+
+    def _always_on_memory(self) -> tuple[str | None, str | None]:
+        """Return (profile, invariants) content from the always-on memory files."""
+        data = self._memory.read_always_on()
+        return data.get("profile"), data.get("invariants")
+
+    def _validate_invariants(
+        self,
+        invariants: str,
+        messages: list[dict],
+        response_text: str,
+        completion: "Completion",
+        params: dict,
+        api_calls: list[dict],
+    ) -> tuple[str, str | None, "Completion"]:
+        """Check the reply against the invariants in code; rework once on violation.
+
+        Returns (final_text, notice_or_None, completion_for_finish_reason).
+        """
+        check_prompt = build_invariant_check_prompt(invariants, response_text)
+        check_params = {"model": params["model"]} if "model" in params else {}
+        check = self._client.complete([{"role": "user", "content": check_prompt}], check_params)
+        api_calls.append(_make_call_record(len(api_calls) + 1, "invariant_check", check, self._client))
+
+        if _invariants_ok(check.text):
+            return response_text, None, completion
+
+        rework_prompt = build_invariant_rework_prompt(invariants, response_text, check.text.strip())
+        rework_messages = messages + [
+            {"role": "assistant", "content": response_text},
+            {"role": "user", "content": rework_prompt},
+        ]
+        rework = self._client.complete(rework_messages, params)
+        api_calls.append(_make_call_record(len(api_calls) + 1, "invariant_rework", rework, self._client))
+        notice = "[Invariant check: reply revised to satisfy the configured invariants.]"
+        return rework.text.strip(), notice, rework
 
     def _build_context(self, active_topic: str | None = None) -> list[dict]:
         """Return the message list to include in the next API request.
@@ -578,6 +811,18 @@ class JarvisAgent:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def _invariants_ok(verdict: str) -> bool:
+    """True when the invariant checker reported no violations.
+
+    The checker is told to answer exactly "OK" when compliant; anything else is
+    treated as a violation list.
+    """
+    v = verdict.strip()
+    if not v:
+        return True
+    return v.splitlines()[0].strip().upper().startswith("OK")
 
 
 def _make_call_record(
