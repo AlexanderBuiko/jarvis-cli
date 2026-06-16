@@ -82,6 +82,10 @@ Commands
   profile.md and invariants.md are always injected into every prompt (all threads).
   invariants.md is also enforced in code: replies are checked and reworked on violation.
 
+  personalize                   Propose a profile.md Style update from recent activity
+                                (shows current vs proposed, asks before overwriting).
+                                Only the '## Style' section is ever changed.
+
   exit / quit                   Exit Jarvis
 
 Parameters
@@ -563,6 +567,37 @@ def handle_memory_delete(args: list[str], agent: JarvisAgent) -> str:
     if not agent.delete_memory(args[0]):
         return f"Memory file not found: '{args[0]}'."
     return f"Memory '{args[0]}' deleted."
+
+
+# ── Profile personalisation ──────────────────────────────────────────────────
+
+
+def handle_personalize(agent: JarvisAgent) -> str:
+    """Propose a Style update for profile.md from recent behaviour, then confirm.
+
+    Interactive: shows the current vs proposed Style section and asks for a [y/N]
+    before overwriting. Only the '## Style' section of profile.md is ever changed;
+    nothing is persisted unless approved.
+    """
+    current, proposed, error = agent.propose_profile_style()
+    if error:
+        return error
+    if proposed is None:
+        return "Recent activity doesn't warrant a style change — profile.md left as is."
+
+    sep = "─" * 60
+    print(f"Current Style\n{sep}\n{(current or '(empty)').strip()}\n")
+    print(f"Proposed Style\n{sep}\n{proposed.strip()}\n")
+
+    try:
+        answer = input("Apply this update to profile.md? [y/N] ").strip().lower()
+    except EOFError:
+        answer = ""
+    if answer in ("y", "yes"):
+        if agent.apply_profile_style(proposed):
+            return "profile.md updated (Style section only)."
+        return "Could not update profile.md (no '## Style' section found)."
+    return "Discarded — profile.md unchanged."
 
 
 def handle_session_chat(session_store: SessionStore) -> str:

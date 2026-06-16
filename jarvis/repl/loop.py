@@ -45,6 +45,7 @@ from .commands import (
     handle_memory_write,
     handle_memory_append,
     handle_memory_delete,
+    handle_personalize,
 )
 from .input import InputController
 from ..agent import JarvisAgent
@@ -201,6 +202,9 @@ def _dispatch(
         if sub == "delete":
             return handle_memory_delete(args[1:], agent)
         return "Usage: memory | memory init | memory edit <name> | memory show <name> | memory load <name> | memory unload <name> | memory write <name> <text> | memory append <name> <text> | memory delete <name>"
+
+    if cmd == "personalize":
+        return handle_personalize(agent)
 
     if cmd == "session":
         if args:
