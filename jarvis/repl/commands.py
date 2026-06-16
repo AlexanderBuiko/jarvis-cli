@@ -2,8 +2,12 @@
 REPL command handlers.
 
 Each handler receives parsed arguments and shared application state, and
-returns a string to print. No I/O is performed here.
+returns a string to print. Handlers are pure except `memory edit`, which
+launches the user's $EDITOR.
 """
+
+import os
+import subprocess
 
 from ..agent import JarvisAgent, _COMPRESSION_INTERVAL
 from ..config.manager import ConfigManager
@@ -50,6 +54,33 @@ Commands
   session chat                  Show the full conversation transcript
   session summary               Show aggregate session statistics with cost charts
   session api                   Show raw API request/response payloads
+
+  task                          Show the active task (working memory)
+  task new [name]               Create a task and link it to this thread
+  task list                     List all saved tasks and their stages
+  task start <name-or-id>       Resume an existing task in this thread
+  task next                     Advance to the next stage and continue (you control transitions)
+  task back                     Return validation → execution
+  task pause                    Unlink the active task (state preserved)
+  task delete <name-or-id>      Permanently delete a task
+  task done <item>              Record a completed item on the active task
+  task todo <item>              Record a remaining item on the active task
+
+  Stages: clarification → planning → execution → validation → done.
+  The agent never changes stage itself; you advance with 'task next' / 'task back'.
+
+  memory                        List long-term memory files
+  memory init                   Scaffold always-on profile.md + invariants.md
+  memory edit <name>            Open a memory file in $EDITOR
+  memory show <name>            Print a memory file
+  memory load <name>            Inject an on-demand memory file into the system prompt
+  memory unload <name>          Stop injecting a memory file
+  memory write <name> <text>    Create or overwrite a memory file
+  memory append <name> <text>   Append a line to a memory file
+  memory delete <name>          Delete a memory file
+
+  profile.md and invariants.md are always injected into every prompt (all threads).
+  invariants.md is also enforced in code: replies are checked and reworked on violation.
 
   exit / quit                   Exit Jarvis
 
@@ -301,6 +332,237 @@ def handle_thread_summary(
         lines.append(sep)
 
     return "\n".join(lines)
+
+
+# ── Working memory (tasks) ──────────────────────────────────────────────────
+
+
+def _format_task(task: dict) -> str:
+    sep = "─" * 60
+    lines = [
+        "Task (Working Memory)",
+        sep,
+        f"  Name:    {task.get('name', '')}",
+        f"  Id:      {task.get('id', '')}",
+        f"  Stage:   {task.get('stage', '')}",
+    ]
+    if task.get("description"):
+        lines.append(f"  Goal:    {task['description']}")
+    if task.get("plan"):
+        lines += ["", "  Plan:"]
+        lines += [f"    {ln}" for ln in task["plan"].splitlines()]
+    if task.get("completed"):
+        lines += ["", "  Completed:"]
+        lines += [f"    - {item}" for item in task["completed"]]
+    if task.get("remaining"):
+        lines += ["", "  Remaining:"]
+        lines += [f"    - {item}" for item in task["remaining"]]
+    if task.get("notes"):
+        lines += ["", f"  Notes:   {task['notes']}"]
+    outputs = task.get("stage_outputs") or {}
+    ordered = [s for s in ("clarification", "planning", "execution", "validation") if s in outputs]
+    if ordered:
+        lines += ["", "  Stage results:"]
+        for stage in ordered:
+            lines.append(f"    [{stage}]")
+            lines += [f"      {ln}" for ln in outputs[stage].splitlines()]
+    threads = task.get("thread_ids") or []
+    if threads:
+        lines += ["", f"  Threads: {', '.join(threads)}"]
+    lines.append(sep)
+    return "\n".join(lines)
+
+
+def handle_task_show(agent: JarvisAgent) -> str:
+    task = agent.active_task
+    if task is None:
+        return "No active task. Use 'task new <name>' or 'task start <name-or-id>'."
+    return _format_task(task)
+
+
+def handle_task_new(args: list[str], agent: JarvisAgent) -> str:
+    name = " ".join(args) if args else None
+    task = agent.create_task(name)
+    return (
+        f"Task created: '{task['name']}' ({task['id']}). "
+        f"Stage: {task['stage']}. This thread is now linked to it."
+    )
+
+
+def handle_task_list(agent: JarvisAgent) -> str:
+    tasks = agent.list_tasks()
+    if not tasks:
+        return "No saved tasks. Use 'task new <name>'."
+    active = agent.active_task
+    active_id = active["id"] if active else None
+    sep = "─" * 60
+    lines = [f"Tasks ({len(tasks)})", sep]
+    for t in tasks:
+        marker = " ←" if t["id"] == active_id else ""
+        lines.append(f"  {t['name']:<28}  {t['id']}  {t['stage']:<14}{marker}")
+    lines.append(sep)
+    lines.append("Use: task start <name-or-id>")
+    return "\n".join(lines)
+
+
+def handle_task_start(args: list[str], agent: JarvisAgent) -> str:
+    if not args:
+        return "Usage: task start <name-or-id>"
+    task = agent.start_task(" ".join(args))
+    if task is None:
+        return f"Task not found: '{' '.join(args)}'. Use 'task list'."
+    return f"Task '{task['name']}' started. Stage: {task['stage']}."
+
+
+def handle_task_pause(agent: JarvisAgent) -> str:
+    name = agent.pause_task()
+    if name is None:
+        return "No active task to pause."
+    return f"Task '{name}' paused and unlinked from this thread (state preserved)."
+
+
+def handle_task_delete(args: list[str], agent: JarvisAgent) -> str:
+    if not args:
+        return "Usage: task delete <name-or-id>"
+    name = agent.delete_task(" ".join(args))
+    if name is None:
+        return f"Task not found: '{' '.join(args)}'."
+    return f"Task '{name}' deleted."
+
+
+def handle_task_next(agent: JarvisAgent) -> str:
+    if agent.active_task is None:
+        return "No active task. Use 'task new <name>' first."
+    new_stage, reply = agent.next_stage()
+    if new_stage is None:
+        return reply  # error message
+    return f"[Task moved to stage: {new_stage}]\n\nA: {reply}"
+
+
+def handle_task_back(agent: JarvisAgent) -> str:
+    if agent.active_task is None:
+        return "No active task. Use 'task new <name>' first."
+    new_stage, reply = agent.back_stage()
+    if new_stage is None:
+        return reply
+    return f"[Task moved to stage: {new_stage}]\n\nA: {reply}"
+
+
+def handle_task_done(args: list[str], agent: JarvisAgent) -> str:
+    if not args:
+        return "Usage: task done <item>"
+    if not agent.add_completed(" ".join(args)):
+        return "No active task. Use 'task new <name>' first."
+    return "Recorded completed item."
+
+
+def handle_task_todo(args: list[str], agent: JarvisAgent) -> str:
+    if not args:
+        return "Usage: task todo <item>"
+    if not agent.add_remaining(" ".join(args)):
+        return "No active task. Use 'task new <name>' first."
+    return "Recorded remaining item."
+
+
+# ── Long-term memory ────────────────────────────────────────────────────────
+
+
+def handle_memory_list(agent: JarvisAgent) -> str:
+    from ..session.long_term_memory import ALWAYS_ON
+    files = agent.list_memory()
+    loaded = agent.loaded_memory
+    if not files:
+        return "No memory files. Use 'memory init' to scaffold profile + invariants."
+    sep = "─" * 60
+    lines = [f"Long-Term Memory ({len(files)})", sep]
+    for name in files:
+        if name in ALWAYS_ON:
+            tag = "  [always-on]"
+        elif name in loaded:
+            tag = "  [loaded]"
+        else:
+            tag = ""
+        lines.append(f"  {name}.md{tag}")
+    lines.append(sep)
+    lines.append("always-on files inject into every prompt; others: 'memory load <name>'")
+    return "\n".join(lines)
+
+
+def handle_memory_init(agent: JarvisAgent) -> str:
+    created = agent.init_memory()
+    if not created:
+        return "Always-on files already exist (profile.md, invariants.md). Use 'memory edit <name>'."
+    return f"Scaffolded: {', '.join(n + '.md' for n in created)}. Edit with 'memory edit <name>'."
+
+
+def handle_memory_edit(args: list[str], agent: JarvisAgent) -> str:
+    if not args:
+        return "Usage: memory edit <name>"
+    name = args[0]
+    # Create an empty file if it does not exist yet, so the editor opens cleanly.
+    if agent.read_memory(name) is None:
+        agent.write_memory(name, "")
+    path = agent.memory_path(name)
+    editor = os.environ.get("EDITOR") or os.environ.get("VISUAL") or "vi"
+    try:
+        subprocess.call([editor, str(path)])
+    except Exception as exc:  # editor missing / non-interactive
+        return f"Could not launch editor ({exc}). Edit the file directly:\n  {path}"
+    agent.refresh_memory(name)
+    return f"Saved {name}.md."
+
+
+def handle_memory_show(args: list[str], agent: JarvisAgent) -> str:
+    if not args:
+        return "Usage: memory show <name>"
+    from ..session.long_term_memory import LongTermMemory
+    name = LongTermMemory.normalize(args[0])
+    content = agent.read_memory(name)
+    if content is None:
+        return f"Memory file not found: '{name}'."
+    sep = "─" * 60
+    return f"{name}.md\n{sep}\n{content.rstrip()}\n{sep}"
+
+
+def handle_memory_load(args: list[str], agent: JarvisAgent) -> str:
+    if not args:
+        return "Usage: memory load <name>"
+    name = agent.load_memory(args[0])
+    if name is None:
+        return f"Memory file not found: '{args[0]}'."
+    return f"Memory '{name}' loaded into the system prompt for this session."
+
+
+def handle_memory_unload(args: list[str], agent: JarvisAgent) -> str:
+    if not args:
+        return "Usage: memory unload <name>"
+    if not agent.unload_memory(args[0]):
+        return f"Memory '{args[0]}' was not loaded."
+    return f"Memory '{args[0]}' unloaded."
+
+
+def handle_memory_write(args: list[str], agent: JarvisAgent) -> str:
+    if len(args) < 2:
+        return "Usage: memory write <name> <text>"
+    name = args[0]
+    agent.write_memory(name, " ".join(args[1:]) + "\n")
+    return f"Memory '{name}' written."
+
+
+def handle_memory_append(args: list[str], agent: JarvisAgent) -> str:
+    if len(args) < 2:
+        return "Usage: memory append <name> <text>"
+    name = args[0]
+    agent.append_memory(name, " ".join(args[1:]))
+    return f"Appended to memory '{name}'."
+
+
+def handle_memory_delete(args: list[str], agent: JarvisAgent) -> str:
+    if not args:
+        return "Usage: memory delete <name>"
+    if not agent.delete_memory(args[0]):
+        return f"Memory file not found: '{args[0]}'."
+    return f"Memory '{args[0]}' deleted."
 
 
 def handle_session_chat(session_store: SessionStore) -> str:

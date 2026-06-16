@@ -98,6 +98,35 @@ class ThreadStore:
     def rename(self, thread_id: str, new_name: str, messages: list[dict], total_tokens: int = 0, total_cost: float = 0.0, cost_series: list | None = None, summary: str | None = None, summary_covered_turns: int = 0, facts: str | None = None, topic_summaries: dict | None = None) -> None:
         self._write(thread_id, new_name, messages, total_tokens, total_cost, cost_series or [], summary, summary_covered_turns, facts, topic_summaries or {})
 
+    # ── Working-memory task association ─────────────────────────────────────────
+
+    def set_active_task(self, thread_id: str, task_id: str | None) -> None:
+        """Link (or unlink) the thread's active working-memory task.
+
+        Patches the existing thread file in place, leaving all other fields
+        untouched. The field is also preserved across normal saves by _write.
+        """
+        path = self._path(thread_id)
+        if not path.exists():
+            return
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return
+        data["active_task_id"] = task_id
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def get_active_task_id(self, thread_id: str) -> str | None:
+        """Return the thread's linked task id, or None."""
+        path = self._path(thread_id)
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
+        return data.get("active_task_id")
+
     def delete(self, thread_id: str) -> bool:
         """Delete the thread file. Returns True if the file existed."""
         path = self._path(thread_id)
@@ -166,6 +195,10 @@ class ThreadStore:
             try:
                 existing = json.loads(path.read_text(encoding="utf-8"))
                 payload["created_at"] = existing.get("created_at", _now())
+                # Preserve the working-memory task link, which is managed
+                # out-of-band via set_active_task and not passed to _write.
+                if existing.get("active_task_id") is not None:
+                    payload["active_task_id"] = existing["active_task_id"]
             except (json.JSONDecodeError, OSError):
                 payload["created_at"] = _now()
         else:
