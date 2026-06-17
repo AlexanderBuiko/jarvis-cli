@@ -27,6 +27,7 @@ _PARAM_PARSERS: dict[str, Any] = {
     "solution_strategy": str,
     "context_strategy":  str,
     "window_size":       int,
+    "task_autonomy":     str,
 }
 
 _PARAM_VALIDATORS: dict[str, tuple] = {
@@ -49,6 +50,10 @@ _PARAM_VALIDATORS: dict[str, tuple] = {
     "window_size": (
         lambda v: v >= 1,
         "window_size must be at least 1",
+    ),
+    "task_autonomy": (
+        lambda v: v in ("auto", "manual"),
+        "task_autonomy must be one of: auto, manual",
     ),
 }
 

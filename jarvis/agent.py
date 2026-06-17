@@ -10,6 +10,8 @@ from .openrouter.client import Completion
 from .llm.engine import LLMEngine
 from .llm.accounting import make_call_record as _make_call_record
 from .pipeline.invariants import InvariantChecker
+from .pipeline.orchestrator import Orchestrator
+from .pipeline.stages import STAGE_AGENTS
 from .prompt_builder.builder import (
     build_system_prompt,
     build_strategy_prompt,
@@ -85,6 +87,7 @@ class JarvisAgent:
         self._threads = ThreadStore()
         self._threads.migrate_legacy()
         self._tasks = TaskStore()
+        self._orchestrator = Orchestrator(STAGE_AGENTS, self._tasks)
         self._memory = LongTermMemory()
         self._behavior = BehaviorLog()
         # Counts interactions this session to pace the personalisation nudge
@@ -125,10 +128,40 @@ class JarvisAgent:
     # ── Public API ────────────────────────────────────────────────────────────
 
     def chat(self, user_input: str) -> str:
-        """Send a message and return the assistant's response.
+        """Send a message and return the assistant's response (with any notices)."""
+        response_text, notices = self._run_turn(user_input)
+        return "\n\n".join([response_text] + notices)
 
-        Builds the full message list as [system] + history + [current turn],
-        then appends both the user turn and assistant response to history.
+    def run_stage_turn(self, entry_message: str, extra_system: str = "") -> str:
+        """Run one turn on behalf of the orchestrator and return the raw reply.
+
+        Reuses the full chat machinery (system assembly, context strategy,
+        invariant check, accounting, behaviour log, persistence) so a stage run
+        is accounted and remembered exactly like a normal turn. extra_system
+        carries the stage's marker protocol. Returns the raw assistant text
+        (control markers intact) so the orchestrator can parse them.
+        """
+        response_text, _ = self._run_turn(entry_message, extra_system=extra_system or None)
+        return response_text
+
+    def run_task(self):
+        """Drive the active task's FSM via the orchestrator. Returns StageResults.
+
+        Forward stages roll on automatically when task_autonomy is 'auto' (the
+        default); the run stops at the first gate (clarification/validation/replan)
+        or the terminal stage.
+        """
+        if self._active_task is None:
+            return None
+        autonomy = self._config.runtime.get("task_autonomy", "auto")
+        return self._orchestrator.run(self._active_task, self.run_stage_turn, autonomy)
+
+    def _run_turn(self, user_input: str, *, extra_system: str | None = None) -> tuple[str, list[str]]:
+        """Core request/response cycle. Returns (response_text, notices).
+
+        Builds the full message list as [system] + working-memory + history +
+        [current turn], runs the completion (+ invariant check), appends the
+        turn to history, runs context-strategy background work, and persists.
         """
         params = self._config.runtime
         strategy = params.get("context_strategy", "none")
@@ -141,6 +174,10 @@ class JarvisAgent:
         system_prompt = build_system_prompt(
             params, self._active_task, self._loaded_memory, profile, invariants
         )
+        # Orchestrator-driven stage runs add their marker protocol here, so it is
+        # present only on autorun and never pollutes free-form chat replies.
+        if extra_system:
+            system_prompt = f"{system_prompt}\n\n{extra_system}"
 
         if params.get("solution_strategy") == "prompt_generation":
             # Two-stage pipeline: stage 1 generates an optimised prompt for the
@@ -252,14 +289,8 @@ class JarvisAgent:
             generated_prompt=generated_prompt,
         )
 
-        parts = [response_text]
-        if invariant_notice:
-            parts.append(invariant_notice)
-        if extra_notice:
-            parts.append(extra_notice)
-        if profile_notice:
-            parts.append(profile_notice)
-        return "\n\n".join(parts)
+        notices = [n for n in (invariant_notice, extra_notice, profile_notice) if n]
+        return response_text, notices
 
     def reset_history(self) -> None:
         """Clear the active thread's messages (thread record is preserved)."""
@@ -501,6 +532,10 @@ class JarvisAgent:
     def back_stage(self) -> tuple[str | None, str]:
         """Return a validation task to execution and continue (`task back`)."""
         return self._move_stage("execution")
+
+    def replan_stage(self) -> tuple[str | None, str]:
+        """Return an execution task to planning to revise the plan (`task replan`)."""
+        return self._move_stage("planning")
 
     def _move_stage(self, target: str | None) -> tuple[str | None, str]:
         if self._active_task is None:

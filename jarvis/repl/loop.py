@@ -30,8 +30,10 @@ from .commands import (
     handle_task_new,
     handle_task_list,
     handle_task_start,
+    handle_task_run,
     handle_task_next,
     handle_task_back,
+    handle_task_replan,
     handle_task_pause,
     handle_task_delete,
     handle_task_done,
@@ -165,10 +167,14 @@ def _dispatch(
             return handle_task_show(agent)
         if sub == "start":
             return handle_task_start(args[1:], agent)
+        if sub == "run":
+            return handle_task_run(agent)
         if sub == "next":
             return handle_task_next(agent)
         if sub == "back":
             return handle_task_back(agent)
+        if sub == "replan":
+            return handle_task_replan(agent)
         if sub == "pause":
             return handle_task_pause(agent)
         if sub == "delete":
@@ -177,7 +183,11 @@ def _dispatch(
             return handle_task_done(args[1:], agent)
         if sub == "todo":
             return handle_task_todo(args[1:], agent)
-        return "Usage: task | task new [name] | task list | task start <name-or-id> | task next | task back | task pause | task delete <name-or-id> | task done <item> | task todo <item>"
+        return (
+            "Usage: task | task new [name] | task list | task start <name-or-id> | task run | "
+            "task next | task back | task replan | task pause | task delete <name-or-id> | "
+            "task done <item> | task todo <item>"
+        )
 
     if cmd == "memory":
         if not args:
