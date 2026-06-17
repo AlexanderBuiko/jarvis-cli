@@ -29,39 +29,11 @@ _EXPERT_PANEL_INSTRUCTION = (
 )
 
 
-# Stage transitions are controlled explicitly by the user via `task next` /
-# `task back`; the agent only does the work of the current stage and never moves
-# stages itself (deterministic, code-enforced control). Each stage describes its
-# job and tells the user how to proceed when they are ready.
-_TASK_STAGE_INSTRUCTIONS: dict[str, str] = {
-    "clarification": (
-        "The active task is in the CLARIFICATION stage. Make sure the goal, success criteria, "
-        "scope, and constraints are clear. Ask clarifying questions ONLY about details that are "
-        "genuinely missing or ambiguous — do not ask about things the user already specified or "
-        "that have a sensible default. When you believe you understand the task, briefly restate "
-        "your understanding and tell the user to run `task next` when they are ready to plan."
-    ),
-    "planning": (
-        "The active task is in the PLANNING stage. Produce a concrete, ordered plan that would "
-        "complete the task. Present the plan and invite the user to adjust it; tell them to run "
-        "`task next` when they approve it and want to start execution."
-    ),
-    "execution": (
-        "The active task is in the EXECUTION stage. Carry out the plan: present the work (e.g. the "
-        "problems to solve) and respond to the user's results as they come. When the planned work "
-        "is finished, tell the user to run `task next` to move to validation."
-    ),
-    "validation": (
-        "The active task is in the VALIDATION stage. Verify the result against the plan and the "
-        "success criteria. If the criteria are met, tell the user to run `task next` to finish the "
-        "task. If they are not met, explain what is wrong and tell the user to run `task back` to "
-        "return to execution."
-    ),
-    "done": (
-        "The active task is DONE. Provide a brief closing summary if useful."
-    ),
-}
-
+# Stage transitions are controlled explicitly (user via `task next`/`task back`,
+# or the orchestrator on autorun); the agent only does the work of the current
+# stage and never moves stages itself. Each stage's role lives on its StageAgent
+# (jarvis/pipeline/stages.py) as the single source — build_system_prompt reads it
+# from the registry so the chat path and the orchestrator never drift apart.
 _TASK_CONTROL_NOTE = (
     "Stage control: you must NOT change the task stage yourself and must not claim a stage is "
     "switched. Stage transitions happen only when the user runs `task next` (forward) or "
@@ -104,8 +76,12 @@ def build_system_prompt(
         )
 
     if task is not None:
+        # Import here to avoid a module-load cycle (stages -> base; builder is
+        # imported widely). The fragment is the stage role's single source.
+        from ..pipeline.stages import stage_system_fragment
+
         stage = task.get("stage", "clarification")
-        stage_instruction = _TASK_STAGE_INSTRUCTIONS.get(stage)
+        stage_instruction = stage_system_fragment(stage, task)
         if stage_instruction:
             parts.append(stage_instruction)
         if stage != "done":
