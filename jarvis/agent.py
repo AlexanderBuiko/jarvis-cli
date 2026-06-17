@@ -6,7 +6,10 @@ The REPL and any other interface interact with Jarvis exclusively through this c
 """
 
 from .config.manager import ConfigManager
-from .openrouter.client import DEFAULT_MODEL, OpenRouterClient, Completion
+from .openrouter.client import Completion
+from .llm.engine import LLMEngine
+from .llm.accounting import make_call_record as _make_call_record
+from .pipeline.invariants import InvariantChecker
 from .prompt_builder.builder import (
     build_system_prompt,
     build_strategy_prompt,
@@ -15,8 +18,6 @@ from .prompt_builder.builder import (
     build_summary_prompt,
     build_facts_extraction_prompt,
     build_topic_routing_prompt,
-    build_invariant_check_prompt,
-    build_invariant_rework_prompt,
     build_profile_style_prompt,
     _PROFILE_NO_CHANGE,
 )
@@ -77,9 +78,10 @@ class JarvisAgent:
       topics        — automatic topic routing; context is scoped to the active topic
     """
 
-    def __init__(self, client: OpenRouterClient, config_manager: ConfigManager) -> None:
+    def __init__(self, client: LLMEngine, config_manager: ConfigManager) -> None:
         self._client = client
         self._config = config_manager
+        self._invariant_checker = InvariantChecker(client)
         self._threads = ThreadStore()
         self._threads.migrate_legacy()
         self._tasks = TaskStore()
@@ -181,7 +183,7 @@ class JarvisAgent:
         # defined, check the reply in code and rework it once on a violation.
         invariant_notice: str | None = None
         if invariants:
-            response_text, invariant_notice, completion = self._validate_invariants(
+            response_text, invariant_notice, completion = self._invariant_checker.validate(
                 invariants, messages, response_text, completion, params, api_calls
             )
 
@@ -666,37 +668,6 @@ class JarvisAgent:
         data = self._memory.read_always_on()
         return data.get("profile"), data.get("invariants")
 
-    def _validate_invariants(
-        self,
-        invariants: str,
-        messages: list[dict],
-        response_text: str,
-        completion: "Completion",
-        params: dict,
-        api_calls: list[dict],
-    ) -> tuple[str, str | None, "Completion"]:
-        """Check the reply against the invariants in code; rework once on violation.
-
-        Returns (final_text, notice_or_None, completion_for_finish_reason).
-        """
-        check_prompt = build_invariant_check_prompt(invariants, response_text)
-        check_params = {"model": params["model"]} if "model" in params else {}
-        check = self._client.complete([{"role": "user", "content": check_prompt}], check_params)
-        api_calls.append(_make_call_record(len(api_calls) + 1, "invariant_check", check, self._client))
-
-        if _invariants_ok(check.text):
-            return response_text, None, completion
-
-        rework_prompt = build_invariant_rework_prompt(invariants, response_text, check.text.strip())
-        rework_messages = messages + [
-            {"role": "assistant", "content": response_text},
-            {"role": "user", "content": rework_prompt},
-        ]
-        rework = self._client.complete(rework_messages, params)
-        api_calls.append(_make_call_record(len(api_calls) + 1, "invariant_rework", rework, self._client))
-        notice = "[Invariant check: reply revised to satisfy the configured invariants.]"
-        return rework.text.strip(), notice, rework
-
     def _build_context(self, active_topic: str | None = None) -> list[dict]:
         """Return the message list to include in the next API request.
 
@@ -881,79 +852,3 @@ class JarvisAgent:
         return _make_call_record(0, "topic_summary_update", completion, self._client)
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-
-def _invariants_ok(verdict: str) -> bool:
-    """True when the invariant checker reported no violations.
-
-    The checker is told to answer exactly "OK" when compliant; anything else is
-    treated as a violation list.
-    """
-    v = verdict.strip()
-    if not v:
-        return True
-    return v.splitlines()[0].strip().upper().startswith("OK")
-
-
-def _make_call_record(
-    index: int,
-    label: str,
-    completion: Completion,
-    client: "OpenRouterClient",
-) -> dict:
-    """Build a single API call record for the session log.
-
-    Cost is computed here using the client's cached pricing data so that each
-    record is self-contained. If pricing is unavailable all cost fields are None.
-    """
-    raw = completion.response
-    usage = raw.get("usage") or {}
-
-    # Pricing lookup uses the requested model ID (canonical, present in the
-    # catalog). Falls back to the actual model reported in the response, which
-    # may be a versioned variant (e.g. "qwen/qwen3-32b-04-28").
-    requested_model: str = completion.request.get("model") or DEFAULT_MODEL
-    actual_model: str = raw.get("model") or requested_model
-
-    input_per_m, output_per_m = client.get_pricing(requested_model)
-    if input_per_m is None and actual_model != requested_model:
-        input_per_m, output_per_m = client.get_pricing(actual_model)
-
-    prompt_tokens: int | None = usage.get("prompt_tokens")
-    completion_tokens: int | None = usage.get("completion_tokens")
-
-    input_cost: float | None = (
-        (prompt_tokens / 1_000_000) * input_per_m
-        if prompt_tokens is not None and input_per_m is not None
-        else None
-    )
-    output_cost: float | None = (
-        (completion_tokens / 1_000_000) * output_per_m
-        if completion_tokens is not None and output_per_m is not None
-        else None
-    )
-    total_cost: float | None = (
-        input_cost + output_cost
-        if input_cost is not None and output_cost is not None
-        else None
-    )
-
-    return {
-        "index": index,
-        "label": label,
-        "latency_ms": completion.latency_ms,
-        "request": completion.request,
-        "response": {
-            "content": completion.text,
-            "finish_reason": completion.finish_reason,
-            "usage": usage or None,
-            "model": actual_model,
-            "id": raw.get("id"),
-        },
-        "cost": {
-            "input_usd": input_cost,
-            "output_usd": output_cost,
-            "total_usd": total_cost,
-        },
-    }
