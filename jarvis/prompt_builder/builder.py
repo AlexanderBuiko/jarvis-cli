@@ -118,17 +118,30 @@ def build_system_prompt(
     return "\n\n".join(parts)
 
 
+_STAGE_ORDER: tuple[str, ...] = ("clarification", "planning", "execution", "validation", "done")
+
+
 def build_working_memory_block(task: dict[str, Any]) -> list[dict]:
     """Return a pseudo-exchange describing the current task state.
 
     Injected ahead of the conversation history so the model always sees the
     task's stage, plan, and progress without the user repeating it. Lives
     outside the message history, so it survives compression and thread switches.
+
+    Stage-scoped on purpose: the tutor's anti-pattern is "include everything saved
+    in every prompt." So instead of dumping every stage's full output every turn,
+    we carry the durable essentials (plan, current step, progress) plus only the
+    *immediately preceding* stage's result — enough to resume without re-explaining,
+    without unbounded context growth as the task progresses.
     """
     lines = [
         f"[Working Memory — Task: {task.get('name', '')}]",
         f"Stage: {task.get('stage', '')}",
     ]
+    if task.get("current_step"):
+        lines.append(f"Current step: {task['current_step']}")
+    if task.get("expected_action"):
+        lines.append(f"Expected action: {task['expected_action']}")
     if task.get("description"):
         lines.append(f"Description: {task['description']}")
     if task.get("plan"):
@@ -143,20 +156,36 @@ def build_working_memory_block(task: dict[str, Any]) -> list[dict]:
     if task.get("notes"):
         lines.append(f"Notes: {task['notes']}")
 
-    # Results recorded as each stage completed. This is the durable task context
-    # that lets work resume in a different thread (where the chat history is gone).
-    outputs = task.get("stage_outputs") or {}
-    ordered = [s for s in ("clarification", "planning", "execution", "validation") if s in outputs]
-    if ordered:
-        lines.append("Results from completed stages:")
-        for stage in ordered:
-            lines.append(f"  [{stage}]")
-            lines += [f"    {ln}" for ln in outputs[stage].splitlines()]
+    # Only the immediately preceding stage's result — the durable hand-off that
+    # lets work resume in a different thread (where the chat history is gone)
+    # without re-dumping the whole task history every turn.
+    prev_output = _preceding_stage_output(task)
+    if prev_output:
+        prev_stage, text = prev_output
+        lines.append(f"Result from the previous stage [{prev_stage}]:")
+        lines += [f"  {ln}" for ln in text.splitlines()]
 
     return [
         {"role": "user", "content": "\n".join(lines)},
         {"role": "assistant", "content": "Understood, I have the current task context."},
     ]
+
+
+def _preceding_stage_output(task: dict[str, Any]) -> tuple[str, str] | None:
+    """Return (stage, output) for the most recent completed stage before the current one."""
+    outputs = task.get("stage_outputs") or {}
+    if not outputs:
+        return None
+    stage = task.get("stage", "clarification")
+    try:
+        idx = _STAGE_ORDER.index(stage)
+    except ValueError:
+        idx = len(_STAGE_ORDER)
+    # Walk backwards from the stage just before the current one.
+    for prev in reversed(_STAGE_ORDER[:idx]):
+        if outputs.get(prev):
+            return prev, outputs[prev]
+    return None
 
 
 def build_strategy_prompt(params: dict[str, Any], user_request: str) -> str:

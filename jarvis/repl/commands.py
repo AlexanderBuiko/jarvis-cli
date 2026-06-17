@@ -350,6 +350,10 @@ def _format_task(task: dict) -> str:
         f"  Id:      {task.get('id', '')}",
         f"  Stage:   {task.get('stage', '')}",
     ]
+    if task.get("current_step"):
+        lines.append(f"  Step:    {task['current_step']}")
+    if task.get("expected_action"):
+        lines.append(f"  Next:    {task['expected_action']}")
     if task.get("description"):
         lines.append(f"  Goal:    {task['description']}")
     if task.get("plan"):

@@ -7,6 +7,8 @@ It lives independently of any thread as a JSON file under ~/.jarvis/tasks/<id>.j
     "id":            "a1b2c3d4",
     "name":          "Prepare Android interview",
     "stage":         "execution",
+    "current_step":  "…",          # the step being worked within the current stage
+    "expected_action": "…",        # machine-readable next action (e.g. await_user, run:task next)
     "description":   "…",
     "plan":          "…",
     "completed":     ["…", …],
@@ -36,11 +38,13 @@ _TASKS_DIR = Path.home() / ".jarvis" / "tasks"
 STAGES: tuple[str, ...] = ("clarification", "planning", "execution", "validation", "done")
 
 # Allowed forward (and revision) transitions. Anything not listed is rejected.
+# The first entry of each list is the default forward transition; later entries
+# are revision/branch targets that must be requested explicitly.
 ALLOWED_TRANSITIONS: dict[str, list[str]] = {
     "clarification": ["planning"],
     "planning":      ["execution"],
-    "execution":     ["validation"],
-    "validation":    ["done", "execution"],   # done, or back to execution for revision
+    "execution":     ["validation", "planning"],  # validate, or back to planning to revise the plan
+    "validation":    ["done", "execution"],        # done, or back to execution for revision
     "done":          [],
 }
 
@@ -59,6 +63,8 @@ class TaskStore:
             "id": task_id,
             "name": name or task_id,
             "stage": "clarification",
+            "current_step": "",
+            "expected_action": "",
             "description": "",
             "plan": "",
             "completed": [],
@@ -131,6 +137,8 @@ class TaskStore:
                 f"(allowed: {', '.join(allowed)})"
             )
         task["stage"] = target
+        # current_step belongs to a stage; clear it so the new stage starts fresh.
+        task["current_step"] = ""
         self.save(task)
         return target
 
@@ -155,6 +163,8 @@ class TaskStore:
         data.setdefault("id", path.stem)
         data.setdefault("name", data["id"])
         data.setdefault("stage", "clarification")
+        data.setdefault("current_step", "")
+        data.setdefault("expected_action", "")
         data.setdefault("description", "")
         data.setdefault("plan", "")
         data.setdefault("completed", [])
