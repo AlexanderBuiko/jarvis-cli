@@ -140,22 +140,81 @@ Goodbye.
 
 ---
 
+## Tasks: a finite state machine
+
+A *task* is a managed process, not a loose chain of prompts. It moves through a
+finite state machine whose transitions are enforced **in code**, so the rules
+survive summarisation, compaction and thread switches:
+
+```
+clarification → planning → execution → validation → done
+                    ↑___________|            |
+                  (replan)              (rework: back to execution)
+```
+
+Each task persists its **phase** (stage), **current step** and **expected
+action**, plus the approved plan and each stage's result — so work can be paused
+at any phase and resumed later (even in a brand-new chat thread) without
+re-explaining anything.
+
+Each stage is owned by a **stage agent** (clarifier, planner, executor,
+validator) — a small class with an input contract, an output contract, a system
+prompt and (later) tools. An **orchestrator** drives the FSM across these agents.
+
+| Command | Description |
+|---|---|
+| `task new [name]` | Create a task and link it to this thread |
+| `task run` | Drive the pipeline autonomously to the next gate or done |
+| `task next` / `task back` / `task replan` | Step a transition manually |
+| `task start <name-or-id>` | Resume an existing task (here or in another thread) |
+| `task pause` | Unlink the active task (state preserved) |
+| `task show` / `task list` | Inspect task state |
+
+With `task_autonomy=auto` (the default), `task run` rolls **forward** through
+stages on its own and stops only at a gate — clarification questions, a
+validation failure, or a replan. Backward edges are always manual. Every advance
+goes through the code-enforced `ALLOWED_TRANSITIONS`; the model never moves itself.
+
 ## Architecture
 
 ```
 __main__.py           ← wires agent + REPL, starts the application
-agent.py              ← JarvisAgent: conversation history, request pipeline
+agent.py              ← JarvisAgent: conversation, memory, LLM gateway
+llm/
+  engine.py           ← LLMEngine interface (provider-independent)
+  accounting.py       ← per-call cost/usage records
 openrouter/
-  client.py           ← HTTP transport for OpenRouter API
+  client.py           ← OpenRouter implementation of LLMEngine
+pipeline/
+  base.py             ← StageAgent contract + control-marker grammar
+  stages.py           ← clarifier / planner / executor / validator agents
+  orchestrator.py     ← drives the task finite state machine
+  invariants.py       ← InvariantChecker (natural-language requirements linter)
 config/
   manager.py          ← validated key-value configuration store
 prompt_builder/
-  builder.py          ← system prompt and strategy prompt construction
+  builder.py          ← system prompt + working-memory block construction
 repl/
   loop.py             ← REPL loop: reads input, calls agent, prints output
   commands.py         ← built-in command handlers
 session/
   store.py            ← in-memory session log
+  task_store.py       ← task FSM persistence (ALLOWED_TRANSITIONS)
 ```
 
-`JarvisAgent` is the central entity. The REPL is a thin UI layer that calls `agent.chat()` for every non-command input. Conversation history lives on the agent and is included in every API request automatically.
+Following the "build from abstractions" principle, the agent, orchestrator and
+stage agents depend on the `LLMEngine` interface rather than any concrete
+provider — so OpenRouter (or a fake engine, in tests) plugs in behind the same
+contract. `JarvisAgent` remains the central entity: the REPL is a thin UI layer
+that calls `agent.chat()` for free-form input and `agent.run_task()` for the
+pipeline.
+
+## Tests
+
+```
+python -m unittest discover -s tests -t .
+```
+
+Pure unit tests plus integration tests that drive the real agent against a
+`FakeEngine` (no network), covering the FSM transitions, stage contracts,
+orchestrator autonomy/gates, and the pause/resume behaviours.
