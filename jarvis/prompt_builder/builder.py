@@ -307,6 +307,55 @@ def build_facts_extraction_prompt(existing_facts: str | None, latest_exchange: l
     return "\n\n".join(parts)
 
 
+_PROFILE_NO_CHANGE = "NO CHANGE"
+
+
+def build_profile_style_prompt(current_style: str, recent_activity: list[dict]) -> str:
+    """Build the prompt that proposes an updated profile Style section.
+
+    The model sees the current Style section plus a compact log of recent
+    interactions and returns a revised Style section (bullet lines only, no
+    heading). It must restrict itself to *style/format* preferences inferable
+    from behaviour (answer length, tone, code examples, step-by-step, etc.) and
+    must NOT invent constraints, identity, or domain rules. When recent behaviour
+    does not justify any change, it returns the sentinel NO CHANGE.
+    """
+    lines = ["Recent interactions (oldest first):"]
+    for i, rec in enumerate(recent_activity, 1):
+        preview = rec.get("user_input", "").replace("\n", " ")
+        if len(preview) > 120:
+            preview = preview[:117] + "..."
+        lines.append(
+            f"  {i}. user_chars={rec.get('user_chars')} "
+            f"response_chars={rec.get('response_chars')} "
+            f"solution_strategy={rec.get('solution_strategy')} "
+            f"context_strategy={rec.get('context_strategy')} "
+            f"in_task={rec.get('had_task')}"
+        )
+        lines.append(f"      msg: {preview}")
+    activity = "\n".join(lines)
+
+    return (
+        "You personalise an AI assistant by maintaining the STYLE section of a user "
+        "profile. You are given the current Style section and a log of the user's recent "
+        "interactions. Infer durable STYLE and FORMAT preferences only — for example: "
+        "preferred answer length (concise vs detailed), tone (formal vs conversational), "
+        "whether they want code examples, step-by-step reasoning, bullet lists, language, etc.\n\n"
+        "Strict rules:\n"
+        "  • Only adjust style/format preferences. Do NOT add constraints, prohibitions, "
+        "tech-stack rules, the user's identity, goals, or any behavioural rule — those live "
+        "elsewhere and are off-limits.\n"
+        "  • Only change something when the recent behaviour clearly and repeatedly supports "
+        "it. Preserve existing lines that are still valid.\n"
+        "  • Keep it short: a handful of '- ' bullet lines.\n"
+        f"  • If recent behaviour does not justify any change, output exactly: {_PROFILE_NO_CHANGE}\n\n"
+        f"CURRENT STYLE SECTION:\n{current_style.strip() or '(empty)'}\n\n"
+        f"{activity}\n\n"
+        "Output only the revised Style section as bullet lines (no '## Style' heading, no "
+        f"commentary), or exactly {_PROFILE_NO_CHANGE}."
+    )
+
+
 def build_prompt_generation_request(user_request: str) -> str:
     """Stage-1 message for the prompt_generation strategy.
 

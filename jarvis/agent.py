@@ -17,11 +17,14 @@ from .prompt_builder.builder import (
     build_topic_routing_prompt,
     build_invariant_check_prompt,
     build_invariant_rework_prompt,
+    build_profile_style_prompt,
+    _PROFILE_NO_CHANGE,
 )
 from .session.store import SessionStore
 from .session.thread_store import ThreadStore
 from .session.task_store import TaskStore
 from .session.long_term_memory import LongTermMemory
+from .session.behavior_log import BehaviorLog
 
 
 
@@ -35,6 +38,10 @@ _DEFAULT_WINDOW_SIZE: int = 10
 
 # API-call labels that count as the user-facing answer (for context-fill metric).
 _ANSWER_LABELS: frozenset[str] = frozenset({"final_answer", "invariant_rework"})
+
+# Every N recorded interactions, remind the user they can refresh their style
+# profile from recent behaviour (`profile`). This is only a nudge — no LLM call.
+_PROFILE_NUDGE_INTERVAL: int = 5
 
 # Opening instruction generated when the user advances into a stage (`task next`),
 # so the new stage's work appears immediately without a separate user message.
@@ -77,6 +84,10 @@ class JarvisAgent:
         self._threads.migrate_legacy()
         self._tasks = TaskStore()
         self._memory = LongTermMemory()
+        self._behavior = BehaviorLog()
+        # Counts interactions this session to pace the personalisation nudge
+        # (independent of the on-disk log, which is capped and would plateau).
+        self._interactions: int = 0
 
         # Working-memory task linked to the active thread (None when unlinked).
         self._active_task: dict | None = None
@@ -188,6 +199,18 @@ class JarvisAgent:
         if extra_record:
             api_calls.append(extra_record)
 
+        # Behaviour log (global, separate from chat threads): record this
+        # interaction's shape so the profile refiner can learn style preferences.
+        self._behavior.record(
+            user_input=user_input,
+            response_chars=len(response_text),
+            solution_strategy=params.get("solution_strategy", "direct"),
+            context_strategy=strategy,
+            had_task=self._active_task is not None,
+        )
+        self._interactions += 1
+        profile_notice = self._maybe_profile_nudge()
+
         # Accounting: every LLM call this turn is billed; the last answer-type
         # call reflects the shown response and its context-window fill.
         answer_calls = [c for c in api_calls if c["label"] in _ANSWER_LABELS]
@@ -232,6 +255,8 @@ class JarvisAgent:
             parts.append(invariant_notice)
         if extra_notice:
             parts.append(extra_notice)
+        if profile_notice:
+            parts.append(profile_notice)
         return "\n\n".join(parts)
 
     def reset_history(self) -> None:
@@ -575,6 +600,52 @@ class JarvisAgent:
         """Re-read a memory file from disk (after an external edit) if it is loaded."""
         if name in self._loaded_memory:
             self._loaded_memory[name] = self._memory.read(name) or ""
+
+    # ── Profile personalisation ────────────────────────────────────────────────
+
+    def _maybe_profile_nudge(self) -> str | None:
+        """Return a one-line reminder every N interactions (no LLM call).
+
+        Only nudges when a profile with a Style section exists, since that is the
+        only thing `profile` can refine.
+        """
+        if self._memory.read_profile_style() is None:
+            return None
+        if self._interactions > 0 and self._interactions % _PROFILE_NUDGE_INTERVAL == 0:
+            return (
+                "[Personalisation: enough recent activity to refresh your style profile — "
+                "run 'personalize' to review a proposed update.]"
+            )
+        return None
+
+    def propose_profile_style(self) -> tuple[str | None, str | None, str | None]:
+        """Generate a proposed new Style section from recent behaviour.
+
+        Returns (current_style, proposed_style, error). On success error is None;
+        proposed_style is None when the model judges no change is warranted. Makes
+        one LLM call; not billed to the thread (an out-of-conversation admin action).
+        """
+        current = self._memory.read_profile_style()
+        if current is None:
+            return None, None, (
+                "No profile.md with a '## Style' section. Run 'memory init' (or "
+                "'memory edit profile') first."
+            )
+        recent = self._behavior.recent(_PROFILE_NUDGE_INTERVAL * 4)
+        if not recent:
+            return current, None, "No recorded activity yet to learn from."
+
+        prompt = build_profile_style_prompt(current, recent)
+        params = {"model": self._config.runtime["model"]} if "model" in self._config.runtime else {}
+        completion = self._client.complete([{"role": "user", "content": prompt}], params)
+        proposed = completion.text.strip()
+        if not proposed or proposed.upper().startswith(_PROFILE_NO_CHANGE):
+            return current, None, None
+        return current, proposed, None
+
+    def apply_profile_style(self, new_style: str) -> bool:
+        """Overwrite only the Style section of profile.md with new_style."""
+        return self._memory.replace_profile_style(new_style)
 
     def get_context_window(self, model_id: str) -> int | None:
         return self._client.get_context_window(model_id)
