@@ -35,7 +35,7 @@ from .commands import (
     handle_task_new,
     handle_task_list,
     handle_task_start,
-    handle_task_pause,
+    handle_task_exit,
     handle_task_delete,
     handle_task_done,
     handle_task_todo,
@@ -63,13 +63,17 @@ def run_repl(agent: JarvisAgent, config_manager: ConfigManager) -> None:
     print("Starts in prompt mode (>). Type ! on an empty line to switch modes.\n")
 
     def _status_fn() -> str:
+        # Inside a task workspace, show the task instead of the (unused) thread tokens.
+        task = agent.active_task
+        if task:
+            return f"task: {task['name']}  ·  stage: {task['stage']}"
         tokens = agent.last_context_tokens
         model = config_manager.runtime.get("model") or DEFAULT_MODEL
         ctx = agent.get_context_window(model)
         if ctx:
             pct = round(tokens * 100 / ctx)
-            return f"{tokens:,}/{ctx:,} ({pct}%) tokens"
-        return f"{tokens:,} tokens"
+            return f"chat: {tokens:,}/{ctx:,} ({pct}%) tokens"
+        return f"chat: {tokens:,} tokens"
 
     def _progress_fn() -> str:
         """Live plan-progress panel shown above the input during execution/validation."""
@@ -425,8 +429,8 @@ def _dispatch(
             return handle_task_start(args[1:], agent)
         if sub == "run":
             return _drive_task(agent, controller)
-        if sub == "pause":
-            return handle_task_pause(agent)
+        if sub == "exit":
+            return handle_task_exit(agent)
         if sub == "delete":
             return handle_task_delete(args[1:], agent)
         if sub == "done":
@@ -435,7 +439,7 @@ def _dispatch(
             return handle_task_todo(args[1:], agent)
         return (
             "Usage: task | task new [name] | task list | task start <name-or-id> | task run | "
-            "task pause | task delete <name-or-id> | task done <item> | task todo <item>"
+            "task exit | task delete <name-or-id> | task done <item> | task todo <item>"
         )
 
     if cmd == "memory":

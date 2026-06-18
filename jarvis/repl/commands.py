@@ -56,19 +56,23 @@ Commands
   session api                   Show raw API request/response payloads
 
   task                          Show the active task (working memory)
-  task new [name]               Create a task (your next message starts it)
+  task new [name]               Create a task workspace and enter it
   task list                     List all saved tasks and their stages
-  task start <name-or-id>       Re-attach an existing task to this thread
-  task run                      Continue the active task with no new input
-  task pause                    Unlink the active task (state preserved)
+  task start <name-or-id>       Enter an existing task workspace
+  task run                      Continue the entered task with no new input
+  task exit                     Leave the task, back to chat (state preserved)
   task delete <name-or-id>      Permanently delete a task
-  task done <item>              Record a completed item on the active task
-  task todo <item>              Record a remaining item on the active task
+  task done <item>              Record a completed item on the entered task
+  task todo <item>              Record a remaining item on the entered task
+
+  Tasks and chat are two separate surfaces. Threads ('thread …') are pure
+  conversation. A task is a standalone workspace with its own context: 'task start'
+  (or 'task new') enters it, 'task exit' leaves. While inside a task your messages
+  drive its pipeline; outside, they're normal chat.
 
   Stages: clarification → planning → execution → validation → done (enforced in code).
-  After 'task new', your next message drives the task; while a task is active your
-  messages keep driving it, and 'task run' continues with no new input. The pipeline
-  pauses only when it needs you:
+  Inside a task your next message drives it, and 'task run' continues with no new
+  input. The pipeline pauses only when it needs you:
     • a free-text question (clarification, or an execution step needing input), or
     • a Confirm / Reject choice at the two critical gates — plan approval and the
       final done decision (↑/↓ to move the arrow, Enter to choose). Reject asks
@@ -406,9 +410,6 @@ def _format_task(task: dict) -> str:
             lines += [f"      {ln}" for ln in outputs[stage].splitlines()]
     if task.get("result_path"):
         lines += ["", f"  Result file: {task['result_path']}"]
-    threads = task.get("thread_ids") or []
-    if threads:
-        lines += ["", f"  Threads: {', '.join(threads)}"]
     lines.append(sep)
     return "\n".join(lines)
 
@@ -451,14 +452,17 @@ def handle_task_start(args: list[str], agent: JarvisAgent) -> str:
     task = agent.start_task(" ".join(args))
     if task is None:
         return f"Task not found: '{' '.join(args)}'. Use 'task list'."
-    return f"Task '{task['name']}' started. Stage: {task['stage']}."
+    return (
+        f"Entered task '{task['name']}' (stage: {task['stage']}). "
+        f"Type a message to continue, or 'task run'. 'task exit' to leave."
+    )
 
 
-def handle_task_pause(agent: JarvisAgent) -> str:
-    name = agent.pause_task()
+def handle_task_exit(agent: JarvisAgent) -> str:
+    name = agent.exit_task()
     if name is None:
-        return "No active task to pause."
-    return f"Task '{name}' paused and unlinked from this thread (state preserved)."
+        return "Not in a task — you're already in chat mode."
+    return f"Left task '{name}' (state preserved). Back in chat mode; 'task start {name}' to resume."
 
 
 def handle_task_delete(args: list[str], agent: JarvisAgent) -> str:

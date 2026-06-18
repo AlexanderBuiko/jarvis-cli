@@ -1,24 +1,9 @@
 """
-Task scenario — a short, end-to-end demo of working-memory tasks.
+Task scenario — a standalone task workspace, exited and re-entered.
 
-Drives a single task through its whole lifecycle and, crucially, FINISHES IT ON
-A DIFFERENT THREAD than it started on — showing that task state (the approved
-plan and each stage's result) is shared across chats while the conversation
-history is not.
-
-Flow:
-    Thread A  (learn-spanish-A)
-      task new            -> clarification
-      <detailed 1st turn> -> agent restates understanding
-      task next           -> planning   (short plan)
-      task next           -> execution  (present the phrases)
-      <"got it">
-      task next           -> validation (simple quiz)
-      <answers>
-    Thread B  (learn-spanish-B)   ← brand-new chat, empty history
-      task start          -> re-attach the SAME task
-      <"remind me where we are"> -> agent answers from shared task state
-      task next           -> done
+A task is independent of chat threads and carries its own conversation. This demo
+drives a task into execution, EXITS it (back to chat), then RE-ENTERS it later and
+finishes — showing the task resumes from its own preserved state and transcript.
 
 Usage:
     python scripts/task_scenario.py
@@ -84,11 +69,10 @@ def main() -> None:
     config.set("seed", "42")  # reproducibility
     agent = JarvisAgent(client, config)
 
-    # ── Thread A: start the task and drive it into execution ─────────────────
-    agent.new_thread("learn-spanish-A")
+    # ── Enter the task and drive it into execution ───────────────────────────
     task = agent.create_task("spanish_phrases")
     print(SEP)
-    print(f"Thread A = '{agent.thread_name}'   Task = {task['name']} ({task['id']})")
+    print(f"Entered task = {task['name']} ({task['id']})   (independent of any thread)")
     print(SEP)
 
     _drive(
@@ -98,27 +82,23 @@ def main() -> None:
             "and 'where is the bathroom?'. Plan = 3 numbered steps, one phrase each. "
             "Execution shows each phrase with its translation. Done when I can recall all three.",
         ],
-        stop_at_stage="validation",   # pause before finishing, to switch threads
+        stop_at_stage="validation",   # leave before finishing, to demo re-entry
     )
 
-    # ── Thread B: a brand-new chat — no shared history ───────────────────────
-    agent.pause_task()
-    agent.new_thread("learn-spanish-B")
+    # ── Exit to chat, then re-enter the task to finish it ────────────────────
+    left = agent.exit_task()
     print("\n" + SEP)
-    print(f"Switched to Thread B = '{agent.thread_name}'  (empty history)")
+    print(f"! task exit   → left '{left}', back in chat mode")
+    agent.start_task("spanish_phrases")
+    print(f"! task start spanish_phrases   → re-entered at stage '{agent.active_task['stage']}'")
     print(SEP)
 
-    agent.start_task("spanish_phrases")
-    print(f"! task start spanish_phrases   → stage '{agent.active_task['stage']}' re-attached")
-
-    # The only thing the agent knows here is the shared TASK state (plan + stage
-    # results), injected via the working-memory block — this thread has no chat
-    # history of the earlier turns. Driving from validation finishes the task.
+    # The task resumes from its own preserved state + transcript.
     _drive(agent, answers=[])
 
     print("\n" + SEP)
-    print("Done. The task started on Thread A and finished on Thread B; the agent on")
-    print("Thread B recalled the plan and progress purely from shared task state.")
+    print("Done. The task was exited and re-entered; it resumed from its own preserved")
+    print("state and transcript — never tied to a chat thread.")
     print(SEP)
 
 

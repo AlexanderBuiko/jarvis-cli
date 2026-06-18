@@ -111,7 +111,8 @@ class JarvisAgent:
         self._last_context_tokens: int = 0
 
         self._session = SessionStore()
-        self._load_active_task()
+        # Tasks are standalone workspaces entered via `task start`/`task new`; they
+        # are not tied to threads, so the session starts in chat mode (no task).
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -121,15 +122,46 @@ class JarvisAgent:
         return "\n\n".join([response_text] + notices)
 
     def run_stage_turn(self, entry_message: str, extra_system: str = "") -> str:
-        """Run one turn on behalf of the orchestrator and return the raw reply.
+        """Run one pipeline turn against the ENTERED TASK's own conversation.
 
-        Reuses the full chat machinery (system assembly, context strategy,
-        invariant check, accounting, behaviour log, persistence) so a stage run
-        is accounted and remembered exactly like a normal turn. extra_system
-        carries the stage's marker protocol. Returns the raw assistant text
-        (control markers intact) so the orchestrator can parse them.
+        A task is a standalone workspace: its turns read and append to the task's
+        own message history (stored on the task file), never the chat thread. This
+        keeps tasks and free chat as two separate surfaces. Returns the raw
+        assistant text (control markers intact) for the orchestrator to parse.
         """
-        response_text, _ = self._run_turn(entry_message, extra_system=extra_system or None)
+        task = self._active_task
+        if task is None:
+            return ""
+        params = self._config.runtime
+        profile, invariants = self._always_on_memory()
+
+        system_prompt = build_system_prompt(params, task, self._loaded_memory, profile, invariants)
+        if extra_system:
+            system_prompt = f"{system_prompt}\n\n{extra_system}"
+
+        # system + working-memory (task state) + the task's own history + this turn.
+        history = task.setdefault("messages", [])
+        messages = (
+            [{"role": "system", "content": system_prompt}]
+            + build_working_memory_block(task)
+            + list(history)
+            + [{"role": "user", "content": entry_message}]
+        )
+
+        api_calls: list[dict] = []
+        completion = self._client.complete(messages, params)
+        response_text = completion.text.strip()
+        api_calls.append(_make_call_record(1, "stage_turn", completion, self._client))
+
+        if invariants:
+            response_text, _notice, completion = self._invariant_checker.validate(
+                invariants, messages, response_text, completion, params, api_calls
+            )
+
+        # Persist the turn on the task's own transcript.
+        history.append({"role": "user", "content": entry_message})
+        history.append({"role": "assistant", "content": response_text})
+        self._tasks.save(task)
         return response_text
 
     def _run_turn(self, user_input: str, *, extra_system: str | None = None) -> tuple[str, list[str]]:
@@ -293,7 +325,6 @@ class JarvisAgent:
         self._summary_covered_turns = 0
         self._facts = None
         self._topic_summaries = {}
-        self._load_active_task()
         return self._thread_name
 
     def load_thread(self, query: str) -> bool:
@@ -318,7 +349,6 @@ class JarvisAgent:
             self._summary, self._summary_covered_turns,
             self._facts, self._topic_summaries,
         )
-        self._load_active_task()
         return True
 
     def delete_thread(self, query: str) -> str:
@@ -350,7 +380,6 @@ class JarvisAgent:
                     self._summary, self._summary_covered_turns,
                     self._facts, self._topic_summaries,
                 )
-                self._load_active_task()
                 return (
                     f"Thread '{target_name}' deleted. "
                     f"Switched to '{self._thread_name}'."
@@ -366,7 +395,6 @@ class JarvisAgent:
                 self._summary_covered_turns = 0
                 self._facts = None
                 self._topic_summaries = {}
-                self._load_active_task()
                 return (
                     f"Thread '{target_name}' deleted. "
                     f"Started new thread '{self._thread_name}'."
@@ -449,47 +477,38 @@ class JarvisAgent:
 
     @property
     def active_task(self) -> dict | None:
-        """The working-memory task linked to the active thread, or None."""
+        """The task workspace currently entered (independent of threads), or None."""
         return dict(self._active_task) if self._active_task else None
 
     def create_task(self, name: str | None = None) -> dict:
-        """Create a task, link it to the active thread, and make it active."""
+        """Create a standalone task workspace and enter it."""
         task = self._tasks.new_task(name)
-        task["thread_ids"] = [self._thread_id]
-        self._tasks.save(task)
-        self._threads.set_active_task(self._thread_id, task["id"])
         self._active_task = task
         return task
 
     def start_task(self, query: str) -> dict | None:
-        """Link an existing task to the active thread and make it active."""
+        """Enter an existing task workspace (independent of the current thread)."""
         task = self._tasks.find(query)
         if task is None:
             return None
-        if self._thread_id not in task["thread_ids"]:
-            task["thread_ids"].append(self._thread_id)
-            self._tasks.save(task)
-        self._threads.set_active_task(self._thread_id, task["id"])
         self._active_task = task
         return task
 
-    def pause_task(self) -> str | None:
-        """Unlink the active task from the thread (the task file is preserved)."""
+    def exit_task(self) -> str | None:
+        """Leave the current task workspace, returning to chat. The task is preserved."""
         if self._active_task is None:
             return None
         name = self._active_task["name"]
-        self._threads.set_active_task(self._thread_id, None)
         self._active_task = None
         return name
 
     def delete_task(self, query: str) -> str | None:
-        """Delete a task file. Unlinks it from the active thread if it was active."""
+        """Delete a task file. Leaves it if it is the one currently entered."""
         task = self._tasks.find(query)
         if task is None:
             return None
         self._tasks.delete(task["id"])
         if self._active_task and self._active_task["id"] == task["id"]:
-            self._threads.set_active_task(self._thread_id, None)
             self._active_task = None
         return task["name"]
 
@@ -656,11 +675,6 @@ class JarvisAgent:
         return self._session
 
     # ── Private helpers ───────────────────────────────────────────────────────
-
-    def _load_active_task(self) -> None:
-        """Load the working-memory task linked to the active thread, if any."""
-        task_id = self._threads.get_active_task_id(self._thread_id)
-        self._active_task = self._tasks.load(task_id) if task_id else None
 
     def _always_on_memory(self) -> tuple[str | None, str | None]:
         """Return (profile, invariants) content from the always-on memory files."""

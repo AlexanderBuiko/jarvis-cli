@@ -1,8 +1,9 @@
 """
 Working-memory task persistence.
 
-A task is the state of a piece of work that may span one or several threads.
-It lives independently of any thread as a JSON file under ~/.jarvis/tasks/<id>.json:
+A task is a standalone workspace — a piece of work with its own conversation,
+fully independent of chat threads. It lives as a JSON file under
+~/.jarvis/tasks/<id>.json:
   {
     "id":            "a1b2c3d4",
     "name":          "Prepare Android interview",
@@ -17,13 +18,14 @@ It lives independently of any thread as a JSON file under ~/.jarvis/tasks/<id>.j
     "remaining":     ["…", …],
     "notes":         "…",
     "stage_outputs": {"clarification": "…", "planning": "…"},
-    "thread_ids":    ["abcd1234", …],
+    "messages":      [{"role": "…", "content": "…"}, …],  # the task's own transcript
+    "result_path":   "…",          # file holding the final deliverable, set at done
     "created_at":    "2026-06-16T14:00:00",
     "updated_at":    "2026-06-16T14:30:00"
   }
 
-A thread references its active task via the "active_task_id" field in the thread
-file (see ThreadStore). The task file is the single source of truth for task state.
+The task file is the single source of truth for task state. Tasks are entered with
+`task start`/`task new` and left with `task exit`; chat threads never reference them.
 
 Stage transitions are enforced here in code (not in prompts) so that the rules
 survive summarisation and compaction.
@@ -75,7 +77,7 @@ class TaskStore:
             "remaining": [],
             "notes": "",
             "stage_outputs": {},
-            "thread_ids": [],
+            "messages": [],
             "created_at": now,
             "updated_at": now,
         }
@@ -191,7 +193,7 @@ class TaskStore:
         data.setdefault("remaining", [])
         data.setdefault("notes", "")
         data.setdefault("stage_outputs", {})
-        data.setdefault("thread_ids", [])
+        data.setdefault("messages", [])
         return data
 
 

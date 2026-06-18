@@ -169,17 +169,22 @@ Each stage is owned by a **stage agent** (clarifier, planner, executor,
 validator) — a small class with an input contract, an output contract, a system
 prompt and (later) tools. An **orchestrator** drives the FSM across these agents.
 
+**Tasks and chat are two separate surfaces.** Threads (`thread …`) are pure
+conversation, no pipeline. A **task is a standalone workspace** with its own
+context, independent of threads: you *enter* it to work the pipeline and *exit*
+back to chat. Inside a task your messages drive its pipeline; outside, they're
+normal chat. The two never cross-contaminate.
+
 | Command | Description |
 |---|---|
-| `task new [name]` | Create a task — **your next message starts it** |
-| `task run` | Continue the active task with no new input |
-| `task start <name-or-id>` | Re-attach an existing task (e.g. in another thread) |
-| `task pause` | Unlink the active task (state preserved) |
+| `task new [name]` | Create a task workspace **and enter it** |
+| `task start <name-or-id>` | Enter an existing task workspace |
+| `task run` | Continue the entered task with no new input |
+| `task exit` | Leave the task, back to chat (state preserved) |
 | `task show` / `task list` | Inspect task state |
 
-After `task new`, **your next message drives the task**; while a task is active your
-messages keep driving it, and `task run` continues with no new input. The pipeline
-**pauses only when it needs you**:
+Inside a task, **your next message drives it**, and `task run` continues with no
+new input. The pipeline **pauses only when it needs you**:
 
 - a **free-text question** — clarification, or an execution step that needs input;
 - a **Confirm / Reject** choice at the two critical gates — **plan approval** and the
