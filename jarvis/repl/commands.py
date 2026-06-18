@@ -56,23 +56,25 @@ Commands
   session api                   Show raw API request/response payloads
 
   task                          Show the active task (working memory)
-  task new [name]               Create a task and link it to this thread
+  task new [name]               Create a task and start its pipeline
   task list                     List all saved tasks and their stages
-  task start <name-or-id>       Resume an existing task in this thread
-  task run                      Drive the pipeline interactively to the next pause or done
+  task start <name-or-id>       Re-attach an existing task to this thread
+  task run                      Continue the active task's pipeline
   task pause                    Unlink the active task (state preserved)
   task delete <name-or-id>      Permanently delete a task
   task done <item>              Record a completed item on the active task
   task todo <item>              Record a remaining item on the active task
 
   Stages: clarification → planning → execution → validation → done (enforced in code).
-  'task run' drives the task and pauses only when it needs you:
+  'task new' starts the pipeline; 'task run' continues it (e.g. after pausing or
+  switching threads). It pauses only when it needs you:
     • a free-text question (clarification, or an execution step needing input), or
     • a Confirm / Reject choice at the two critical gates — plan approval and the
       final done decision (↑/↓ to move the arrow, Enter to choose). Reject asks
       "What's the problem?" and reworks with your feedback.
-  Everything in between (clarification→planning, each execution step,
-  execution→validation) runs automatically.
+  Execution runs step-by-step under a live step table; press Ctrl+C to stop (the
+  last completed step is saved — 'task run' resumes from it). At done, the final
+  deliverable is assembled and saved to a result file (see 'task show').
 
   memory                        List long-term memory files
   memory init                   Scaffold always-on profile.md + invariants.md
@@ -348,20 +350,21 @@ def handle_thread_summary(
 
 
 def render_plan_progress(task: dict) -> str | None:
-    """Render the plan as a checklist with per-step status, or None if no steps.
+    """Render the plan as a step table with per-step status, or None if no steps.
 
-    ✓ completed   ▶ in-progress   ○ pending
-    The leading glyphs are also used by the live input-panel to colour each line.
+    ✓ completed   ▶ in-progress   ○ pending. The status glyph is the first
+    non-space character on each row, which the live input-panel uses to colour it.
     """
     steps = task.get("plan_steps") or []
     if not steps:
         return None
     idx = task.get("step_index", 0)
     done = min(idx, len(steps))
-    lines = [f"Plan progress ({done}/{len(steps)})"]
+    lines = [f"Steps ({done}/{len(steps)} done)"]
+    width = len(str(len(steps)))
     for i, step in enumerate(steps):
         glyph = "✓" if i < idx else ("▶" if i == idx else "○")
-        lines.append(f"{glyph} {step}")
+        lines.append(f"  {glyph}  {str(i + 1).rjust(width)}. {step}")
     return "\n".join(lines)
 
 
@@ -399,6 +402,8 @@ def _format_task(task: dict) -> str:
         for stage in ordered:
             lines.append(f"    [{stage}]")
             lines += [f"      {ln}" for ln in outputs[stage].splitlines()]
+    if task.get("result_path"):
+        lines += ["", f"  Result file: {task['result_path']}"]
     threads = task.get("thread_ids") or []
     if threads:
         lines += ["", f"  Threads: {', '.join(threads)}"]

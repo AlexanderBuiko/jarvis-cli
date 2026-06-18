@@ -49,7 +49,8 @@ def auto_drive(agent: JarvisAgent, answers: list[str]) -> None:
             print(f"  ▸ You: {answer}")
             pending = f"The user responded: {answer}"
         elif agent.active_task and agent.active_task["stage"] == "done":
-            print("\n✓ Task complete.")
+            path = agent.save_task_result(result.text)
+            print(f"\n✓ Task complete. Result saved to {path}")
             return
 
 

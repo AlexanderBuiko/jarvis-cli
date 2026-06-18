@@ -69,6 +69,21 @@ class TaskStoreTest(unittest.TestCase):
         self.assertEqual(loaded["current_step"], "")
         self.assertEqual(loaded["expected_action"], "")
 
+    def test_save_result_writes_artifact_and_records_path(self):
+        task = self.store.new_task("demo")
+        path = self.store.save_result(task, "# Deliverable\nthe final result")
+        self.assertTrue(path.exists())
+        self.assertEqual(path.read_text(encoding="utf-8"), "# Deliverable\nthe final result")
+        self.assertEqual(task["result_path"], str(path))
+        # Persisted to the task file too.
+        self.assertEqual(self.store.load(task["id"])["result_path"], str(path))
+
+    def test_new_task_has_result_fields(self):
+        task = self.store.new_task("demo")
+        self.assertEqual(task["plan_steps"], [])
+        self.assertEqual(task["step_index"], 0)
+        self.assertEqual(task["result_path"], "")
+
     def test_allowed_transitions_shape(self):
         # The execution -> planning revision edge from the tutor's KB is present.
         self.assertIn("planning", ALLOWED_TRANSITIONS["execution"])

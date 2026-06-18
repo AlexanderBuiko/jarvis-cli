@@ -1,4 +1,4 @@
-"""Tests for the plan-progress renderer (completed / in-progress / pending)."""
+"""Tests for the plan-progress step table (completed / in-progress / pending)."""
 
 import unittest
 
@@ -14,18 +14,18 @@ class RenderPlanProgressTest(unittest.TestCase):
         out = render_plan_progress(task)
         self.assertEqual(
             out.splitlines(),
-            ["Plan progress (1/3)", "✓ a", "▶ b", "○ c"],
+            ["Steps (1/3 done)", "  ✓  1. a", "  ▶  2. b", "  ○  3. c"],
         )
 
     def test_all_done(self):
         task = {"plan_steps": ["a", "b"], "step_index": 2}
         out = render_plan_progress(task)
-        self.assertEqual(out.splitlines(), ["Plan progress (2/2)", "✓ a", "✓ b"])
+        self.assertEqual(out.splitlines(), ["Steps (2/2 done)", "  ✓  1. a", "  ✓  2. b"])
 
     def test_first_step_in_progress(self):
         task = {"plan_steps": ["a", "b"], "step_index": 0}
         out = render_plan_progress(task)
-        self.assertEqual(out.splitlines(), ["Plan progress (0/2)", "▶ a", "○ b"])
+        self.assertEqual(out.splitlines(), ["Steps (0/2 done)", "  ▶  1. a", "  ○  2. b"])
 
 
 if __name__ == "__main__":

@@ -171,13 +171,14 @@ prompt and (later) tools. An **orchestrator** drives the FSM across these agents
 
 | Command | Description |
 |---|---|
-| `task new [name]` | Create a task and link it to this thread |
-| `task run` | Drive the pipeline interactively to the next pause or done |
-| `task start <name-or-id>` | Resume an existing task (here or in another thread) |
+| `task new [name]` | Create a task **and start its pipeline** |
+| `task run` | Continue the active task's pipeline |
+| `task start <name-or-id>` | Re-attach an existing task (e.g. in another thread) |
 | `task pause` | Unlink the active task (state preserved) |
 | `task show` / `task list` | Inspect task state |
 
-`task run` drives the task and **pauses only when it needs you**:
+`task new` starts the pipeline; `task run` continues it (after pausing, stopping,
+or switching threads). It **pauses only when it needs you**:
 
 - a **free-text question** — clarification, or an execution step that needs input;
 - a **Confirm / Reject** choice at the two critical gates — **plan approval** and the
@@ -189,10 +190,15 @@ Everything in between — clarification→planning, each execution step,
 execution→validation — runs **automatically**. Every transition still goes through
 the code-enforced `ALLOWED_TRANSITIONS`; the model never moves itself.
 
-**Live progress.** Planning parses the plan into discrete steps; execution then
-works **one step per turn**, printing each step's result as it completes, with the
-spinner reporting `executing step k/n`. A progress panel (✓ completed · ▶ in-progress
-· ○ pending) also appears above the input line while a task is mid-flight.
+**Live execution.** Planning parses the plan into discrete steps; execution then
+works **one step per turn** under a **live step table** above the input
+(✓ completed · ▶ in-progress · ○ pending) that redraws in place as each step
+finishes, with a spinner + timer beneath it. Press **Ctrl+C** to stop — the last
+completed step is saved, and `task run` resumes from there.
+
+**The result.** Execution shows concise status, not raw output. At **done** the
+agent assembles the complete deliverable, prints it, and **saves it to a result
+file** (`~/.jarvis/tasks/<id>.result.md`, shown in `task show`).
 
 ## Architecture
 

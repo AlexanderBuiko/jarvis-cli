@@ -110,41 +110,81 @@ def run_repl(agent: JarvisAgent, config_manager: ConfigManager) -> None:
 # ── Interactive task driver ─────────────────────────────────────────────────────
 
 # Safety cap on driver iterations (a misbehaving model can't loop forever).
-_MAX_DRIVE_TURNS = 60
+_MAX_DRIVE_TURNS = 80
+
+# ANSI colours for the live step table, by status glyph.
+_STEP_ANSI = {"✓": "\033[32m", "▶": "\033[33m", "○": "\033[90m"}
+_ANSI_RESET = "\033[0m"
+
+
+class _LiveRegion:
+    """A multi-line terminal region that redraws in place (cursor-up + clear)."""
+
+    def __init__(self) -> None:
+        self._lines = 0
+
+    def render(self, lines: list[str]) -> None:
+        out = []
+        if self._lines:
+            out.append(f"\033[{self._lines}A")   # cursor up to the region's top
+        out.append("\033[J")                     # clear from cursor to end of screen
+        out.append("\n".join(lines) + "\n")
+        sys.stdout.write("".join(out))
+        sys.stdout.flush()
+        self._lines = len(lines)
+
+    def finalize(self) -> None:
+        """Leave the current content on screen and stop tracking it."""
+        self._lines = 0
+
+
+def _color_step_line(line: str) -> str:
+    colour = _STEP_ANSI.get(line.lstrip()[:1])
+    return f"{colour}{line}{_ANSI_RESET}" if colour else line
 
 
 def _drive_task(agent: JarvisAgent, controller: InputController) -> str:
     """Drive the active task's pipeline interactively to the next pause or done.
 
-    Runs one stage turn at a time (each with the spinner, so execution steps are
-    visible live), and pauses at gates: a free-text question, or a Confirm/Reject
-    approval (only at plan approval and the final done decision).
+    Execution runs under a live step table (updated in place as each step
+    completes) with a spinner+timer beneath it. Other stages run with the plain
+    spinner. Pauses at gates: a free-text question, or a Confirm/Reject approval
+    (only at plan approval and the final done decision).
     """
     if agent.active_task is None:
         return "No active task. Use 'task new <name>' first."
 
-    def _status() -> str:
-        t = agent.active_task
-        steps = t.get("plan_steps") if t else None
-        if t and t.get("stage") == "execution" and steps:
-            n = len(steps)
-            return f"executing step {min(t.get('step_index', 0) + 1, n)}/{n}"
-        return t.get("stage", "") if t else ""
-
     pending = ""
     for _ in range(_MAX_DRIVE_TURNS):
-        feedback = pending
+        stage = agent.active_task["stage"] if agent.active_task else None
+        if stage is None:
+            return "No active task."
+
+        if stage == "execution":
+            outcome, pending = _drive_execution(agent, controller, pending)
+            if outcome == "stopped":
+                return "■ Stopped. The last completed step is saved — run 'task run' to resume."
+            if outcome == "error":
+                return pending  # carries the error message
+            continue  # left execution (advanced) or handled an inline question
+
+        feedback, pending = pending, ""
         try:
             result, interrupted = _run_with_spinner(
-                lambda: agent.pipeline_step(feedback), status_fn=_status
+                lambda: agent.pipeline_step(feedback), status_fn=lambda: stage
             )
         except Exception as exc:
             return f"Error: {exc}"
-        pending = ""
         if result is None:
             return "No active task."
         if result.blocked:
             return f"[{result.stage}] cannot start: {result.blocked}"
+
+        # Done stage: the step output is the assembled deliverable — save + report.
+        if agent.active_task and agent.active_task["stage"] == "done":
+            path = agent.save_task_result(result.text)
+            print(f"[done]\n{result.text}\n")
+            return f"✓ Task complete. Result saved to {path}"
 
         header = f"[{result.stage}]"
         if result.advanced_to:
@@ -152,7 +192,6 @@ def _drive_task(agent: JarvisAgent, controller: InputController) -> str:
         print(f"{header}\n{result.text}\n")
 
         if interrupted:
-            # The completed step is saved; the next 'task run' resumes from here.
             return "■ Stopped. The last completed step is saved — run 'task run' to resume."
 
         verdict = result.verdict
@@ -160,7 +199,7 @@ def _drive_task(agent: JarvisAgent, controller: InputController) -> str:
             choice = controller.select(_approval_title(result.stage), ["Confirm", "Reject"])
             if choice == 0:
                 agent.advance_to(verdict.confirm_target)
-                continue  # proceed (or run the done stage for a closing summary)
+                continue
             if choice == 1:
                 problem = controller.read_text("What's the problem?")
                 agent.advance_to(verdict.reject_target)
@@ -178,11 +217,78 @@ def _drive_task(agent: JarvisAgent, controller: InputController) -> str:
             pending = f"The user responded: {answer}"
             continue
 
-        if agent.active_task and agent.active_task["stage"] == "done":
-            return "✓ Task complete."
-        # Otherwise (in-stage progress, or advanced with no gate) — keep driving.
-
     return "Stopped after the step cap. Run 'task run' to continue."
+
+
+def _exec_panel(agent: JarvisAgent, frame: str, elapsed: float, interrupted: bool,
+                final: bool = False) -> list[str]:
+    """Build the live execution panel: the step table plus a spinner+timer line."""
+    table = render_plan_progress(agent.active_task) or "Executing…"
+    lines = [_color_step_line(ln) for ln in table.split("\n")]
+    if not final:
+        if interrupted:
+            spin = f"{frame} Stopping {elapsed:4.1f}s  ·  finishing current step…"
+        else:
+            spin = f"{frame} Working… {elapsed:4.1f}s  ·  Ctrl+C to stop"
+        lines += ["", spin]
+    return lines
+
+
+def _drive_execution(agent: JarvisAgent, controller: InputController, pending: str):
+    """Drive the execution stage under a live, in-place step table. Returns (outcome, carry)."""
+    region = _LiveRegion()
+    frames = itertools.cycle(_SPINNER_FRAMES)
+    while agent.active_task and agent.active_task["stage"] == "execution":
+        feedback, pending = pending, ""
+        box: dict = {}
+
+        def _worker() -> None:
+            try:
+                box["result"] = agent.pipeline_step(feedback)
+            except BaseException as exc:
+                box["error"] = exc
+
+        worker = threading.Thread(target=_worker, daemon=True)
+        worker.start()
+        start = time.perf_counter()
+        interrupted = False
+        while worker.is_alive():
+            try:
+                region.render(_exec_panel(agent, next(frames), time.perf_counter() - start, interrupted))
+                worker.join(0.12)
+            except KeyboardInterrupt:
+                interrupted = True
+
+        if "error" in box:
+            region.render(_exec_panel(agent, " ", time.perf_counter() - start, False, final=True))
+            region.finalize()
+            return "error", f"Error: {box['error']}"
+
+        result = box.get("result")
+        # Final redraw shows the table after this step completed.
+        region.render(_exec_panel(agent, " ", time.perf_counter() - start, interrupted, final=True))
+
+        if interrupted:
+            region.finalize()
+            return "stopped", ""
+        if result is None or result.blocked:
+            region.finalize()
+            return "left", ""
+
+        verdict = result.verdict
+        if verdict and verdict.gate == GATE_QUESTION:
+            region.finalize()
+            print(f"\n{result.text}\n")
+            answer = controller.read_text("Your answer:")
+            if not answer:
+                return "stopped", ""
+            pending = f"The user responded: {answer}"
+            region = _LiveRegion()
+            continue
+        # Step done / advanced — loop; if execution was left, the while exits.
+
+    region.finalize()
+    return "left", pending
 
 
 def _approval_title(stage: str) -> str:
@@ -260,7 +366,10 @@ def _dispatch(
             return handle_task_show(agent)
         sub = args[0].lower()
         if sub == "new":
-            return handle_task_new(args[1:], agent)
+            created = handle_task_new(args[1:], agent)
+            print(created)
+            # Kick off the pipeline immediately; 'task run' is then for continuing.
+            return _drive_task(agent, controller)
         if sub == "list":
             return handle_task_list(agent)
         if sub == "show":

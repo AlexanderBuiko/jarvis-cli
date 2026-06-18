@@ -431,7 +431,7 @@ class InputController:
         }
         items = []
         for line in text.split("\n"):
-            cls = glyph_class.get(line[:1], "class:progress.header")
+            cls = glyph_class.get(line.lstrip()[:1], "class:progress.header")
             items.append((cls, line + "\n"))
         return FormattedText(items)
 

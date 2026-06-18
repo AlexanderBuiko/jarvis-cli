@@ -68,6 +68,7 @@ class TaskStore:
             "expected_action": "",
             "plan_steps": [],
             "step_index": 0,
+            "result_path": "",
             "description": "",
             "plan": "",
             "completed": [],
@@ -120,6 +121,15 @@ class TaskStore:
             path.unlink()
             return True
         return False
+
+    def save_result(self, task: dict, text: str) -> Path:
+        """Write the task's final deliverable to a file artifact and record its path."""
+        self._dir.mkdir(parents=True, exist_ok=True)
+        path = self._dir / f"{task['id']}.result.md"
+        path.write_text(text, encoding="utf-8")
+        task["result_path"] = str(path)
+        self.save(task)
+        return path
 
     def advance_stage(self, task: dict, target: str | None = None) -> str:
         """Move the task to the next stage, enforcing ALLOWED_TRANSITIONS in code.
@@ -174,6 +184,7 @@ class TaskStore:
         data.setdefault("expected_action", "")
         data.setdefault("plan_steps", [])
         data.setdefault("step_index", 0)
+        data.setdefault("result_path", "")
         data.setdefault("description", "")
         data.setdefault("plan", "")
         data.setdefault("completed", [])

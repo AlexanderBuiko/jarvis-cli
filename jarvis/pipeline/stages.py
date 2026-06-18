@@ -222,14 +222,19 @@ class ValidatorAgent(StageAgent):
 
 
 class DoneAgent(StageAgent):
-    """Terminal stage — no work, no markers; present only for a uniform registry."""
+    """Terminal stage — assemble the final deliverable from the work done."""
     stage = "done"
 
     def system_fragment(self, task: dict) -> str:
-        return "The active task is DONE. Provide a brief closing summary if useful."
+        return (
+            "The task is being finalised. Assemble the COMPLETE final deliverable from the work "
+            "produced during execution — the actual result the task set out to create, ready to "
+            "hand off. Output only the deliverable itself (no meta-commentary like 'the task is "
+            "finished')."
+        )
 
     def entry_message(self, task: dict) -> str:
-        return "The task is finished. Please give a brief closing summary."
+        return "Produce the complete final deliverable for this task now."
 
     def marker_protocol(self) -> str:
         return ""

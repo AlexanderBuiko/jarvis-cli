@@ -508,6 +508,12 @@ class JarvisAgent:
             return None
         return self._orchestrator.step(self._active_task, self.run_stage_turn, extra_instruction)
 
+    def save_task_result(self, text: str):
+        """Persist the active task's final deliverable to a file artifact. Returns the path."""
+        if self._active_task is None:
+            return None
+        return self._tasks.save_result(self._active_task, text)
+
     def advance_to(self, target: str) -> str | None:
         """Move the active task to target (code-enforced). A no-op if already there.
 

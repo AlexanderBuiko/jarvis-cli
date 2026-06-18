@@ -141,6 +141,15 @@ def build_working_memory_block(task: dict[str, Any]) -> list[dict]:
         lines.append(f"Result from the previous stage [{prev_stage}]:")
         lines += [f"  {ln}" for ln in text.splitlines()]
 
+    # The done stage assembles the deliverable, so it also needs the full execution
+    # log (the actual work) even when that is not the immediately preceding stage.
+    outputs = task.get("stage_outputs") or {}
+    if task.get("stage") == "done" and outputs.get("execution") and (
+        not prev_output or prev_output[0] != "execution"
+    ):
+        lines.append("Execution work to assemble into the deliverable:")
+        lines += [f"  {ln}" for ln in outputs["execution"].splitlines()]
+
     return [
         {"role": "user", "content": "\n".join(lines)},
         {"role": "assistant", "content": "Understood, I have the current task context."},
