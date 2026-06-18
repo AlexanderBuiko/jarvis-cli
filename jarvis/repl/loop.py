@@ -187,11 +187,13 @@ def _drive_task(agent: JarvisAgent, controller: InputController, initial_pending
         if result.blocked:
             return f"[{result.stage}] cannot start: {result.blocked}"
 
-        # Done stage: the step output is the assembled deliverable — save + report.
+        # Done stage: split the one-line summary from the full deliverable; save the
+        # deliverable to a file and show only the short description + path.
         if agent.active_task and agent.active_task["stage"] == "done":
-            path = agent.save_task_result(result.text)
-            print(f"[done]\n{result.text}\n")
-            return f"✓ Task complete. Result saved to {path}"
+            summary, deliverable = _split_summary(result.text)
+            path = agent.save_task_result(deliverable)
+            print(f"[done] {summary}\n")
+            return f"✓ Task complete. Full result saved to {path}"
 
         header = f"[{result.stage}]"
         if result.advanced_to:
@@ -310,6 +312,26 @@ def _drive_execution(agent: JarvisAgent, controller: InputController, pending: s
 
     region.finalize()
     return "left", pending
+
+
+def _split_summary(text: str) -> tuple[str, str]:
+    """Split a done-stage reply into (short_summary, deliverable).
+
+    Expects a leading 'SUMMARY: <one line>' then the deliverable. Falls back to
+    the first non-empty line as the summary and the whole text as the deliverable.
+    """
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.upper().startswith("SUMMARY:"):
+            summary = stripped[len("SUMMARY:"):].strip()
+            deliverable = "\n".join(lines[i + 1:]).strip()
+            return (summary or "Task complete."), (deliverable or text.strip())
+        break
+    first = next((ln.strip() for ln in lines if ln.strip()), "Task complete.")
+    return first[:200], text.strip()
 
 
 def _approval_prompt(stage: str) -> tuple[str, list[str]]:

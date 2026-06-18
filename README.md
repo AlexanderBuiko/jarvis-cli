@@ -198,8 +198,9 @@ finishes, with a spinner + timer beneath it. Press **Ctrl+C** to stop — the la
 completed step is saved, and `task run` resumes from there.
 
 **The result.** Execution shows concise status, not raw output. At **done** the
-agent assembles the complete deliverable, prints it, and **saves it to a result
-file** (`~/.jarvis/tasks/<id>.result.md`, shown in `task show`).
+agent assembles the complete deliverable; a **short summary** is shown and the full
+deliverable is **saved to a result file** (`~/.jarvis/tasks/<id>.result.md`, whose
+path is printed and also shown in `task show`).
 
 ## Architecture
 

@@ -74,8 +74,9 @@ Commands
       final done decision (↑/↓ to move the arrow, Enter to choose). Reject asks
       "What's the problem?" and reworks with your feedback.
   Execution runs step-by-step under a live step table; press Ctrl+C to stop (the
-  last completed step is saved — 'task run' resumes from it). At done, the final
-  deliverable is assembled and saved to a result file (see 'task show').
+  last completed step is saved — 'task run' resumes from it). At done, a short
+  summary is shown and the full deliverable is saved to a result file (its path is
+  shown and also in 'task show').
 
   memory                        List long-term memory files
   memory init                   Scaffold always-on profile.md + invariants.md

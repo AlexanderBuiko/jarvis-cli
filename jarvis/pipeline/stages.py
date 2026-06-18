@@ -238,14 +238,17 @@ class DoneAgent(StageAgent):
 
     def system_fragment(self, task: dict) -> str:
         return (
-            "The task is being finalised. Assemble the COMPLETE final deliverable from the work "
-            "produced during execution — the actual result the task set out to create, ready to "
-            "hand off. Output only the deliverable itself (no meta-commentary like 'the task is "
-            "finished')."
+            "The task is being finalised. Output exactly:\n"
+            "  1. A single line beginning with 'SUMMARY: ' giving a one-sentence description of "
+            "the deliverable.\n"
+            "  2. A blank line.\n"
+            "  3. The COMPLETE final deliverable assembled from the work produced during "
+            "execution — the actual result the task set out to create, ready to hand off.\n"
+            "No other meta-commentary (e.g. 'the task is finished')."
         )
 
     def entry_message(self, task: dict) -> str:
-        return "Produce the complete final deliverable for this task now."
+        return "Finalise the task: a 'SUMMARY: ' line, a blank line, then the complete deliverable."
 
     def marker_protocol(self) -> str:
         return ""

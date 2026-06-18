@@ -35,6 +35,7 @@ from jarvis.config.manager import ConfigManager
 from jarvis.openrouter.client import OpenRouterClient
 from jarvis.agent import JarvisAgent
 from jarvis.pipeline.base import GATE_APPROVAL, GATE_QUESTION
+from jarvis.repl.loop import _split_summary
 
 SEP = "─" * 66
 
@@ -66,8 +67,9 @@ def _drive(agent: JarvisAgent, answers: list[str], stop_at_stage: str | None = N
             print(f"  ▸ You: {answer}")
             pending = f"The user responded: {answer}"
         elif agent.active_task and agent.active_task["stage"] == "done":
-            path = agent.save_task_result(result.text)
-            print(f"\n✓ Task complete. Result saved to {path}")
+            summary, deliverable = _split_summary(result.text)
+            path = agent.save_task_result(deliverable)
+            print(f"\n✓ Task complete: {summary}\n   Result saved to {path}")
             return
 
 
