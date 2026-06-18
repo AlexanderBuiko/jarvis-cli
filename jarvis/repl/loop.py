@@ -77,7 +77,14 @@ def run_repl(agent: JarvisAgent, config_manager: ConfigManager) -> None:
             return ""
         return render_plan_progress(task) or ""
 
-    controller = InputController(status_fn=_status_fn, progress_fn=_progress_fn)
+    def _hint_fn() -> str:
+        """Task-aware placeholder so an in-progress task doesn't show the generic hint."""
+        task = agent.active_task
+        if not task or task.get("stage") == "done":
+            return ""
+        return f"Task '{task['name']}' is at the {task['stage']} stage — type 'task run' to continue."
+
+    controller = InputController(status_fn=_status_fn, progress_fn=_progress_fn, hint_fn=_hint_fn)
 
     while True:
         try:
@@ -90,7 +97,8 @@ def run_repl(agent: JarvisAgent, config_manager: ConfigManager) -> None:
             output = _dispatch(raw, agent, config_manager, controller)
         else:
             try:
-                output = f"A: {_run_with_spinner(lambda: agent.chat(raw))}"
+                reply, _ = _run_with_spinner(lambda: agent.chat(raw))
+                output = f"A: {reply}"
             except Exception as exc:
                 output = f"Error: {exc}"
 
@@ -127,7 +135,9 @@ def _drive_task(agent: JarvisAgent, controller: InputController) -> str:
     for _ in range(_MAX_DRIVE_TURNS):
         feedback = pending
         try:
-            result = _run_with_spinner(lambda: agent.pipeline_step(feedback), status_fn=_status)
+            result, interrupted = _run_with_spinner(
+                lambda: agent.pipeline_step(feedback), status_fn=_status
+            )
         except Exception as exc:
             return f"Error: {exc}"
         pending = ""
@@ -140,6 +150,10 @@ def _drive_task(agent: JarvisAgent, controller: InputController) -> str:
         if result.advanced_to:
             header += f" → {result.advanced_to}"
         print(f"{header}\n{result.text}\n")
+
+        if interrupted:
+            # The completed step is saved; the next 'task run' resumes from here.
+            return "■ Stopped. The last completed step is saved — run 'task run' to resume."
 
         verdict = result.verdict
         if verdict and verdict.gate == GATE_APPROVAL:
@@ -350,12 +364,15 @@ _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _SPINNER_DELAY_S = 0.25
 
 
-def _run_with_spinner(fn: Callable[[], str], status_fn: Callable[[], str] | None = None) -> str:
+def _run_with_spinner(
+    fn: Callable[[], str], status_fn: Callable[[], str] | None = None
+) -> tuple[object, bool]:
     """Run fn() on a worker thread while animating an elapsed-time spinner.
 
-    Signals that work is in progress and that input is not expected. status_fn,
-    when given, supplies a live suffix (e.g. the current plan step) re-read on
-    every frame. The result (or exception) of fn is returned (or re-raised).
+    Returns (value, interrupted). On Ctrl+C the current step is allowed to finish
+    (so its state is saved cleanly) and interrupted=True is returned, letting the
+    caller stop before the next step. status_fn supplies a live suffix re-read on
+    every frame. fn's exception, if any, is re-raised.
     """
     box: dict = {}
 
@@ -371,19 +388,25 @@ def _run_with_spinner(fn: Callable[[], str], status_fn: Callable[[], str] | None
     frames = itertools.cycle(_SPINNER_FRAMES)
     start = time.perf_counter()
     drawing = False
+    interrupted = False
     while worker.is_alive():
-        elapsed = time.perf_counter() - start
-        if elapsed >= _SPINNER_DELAY_S:
-            drawing = True
-            suffix = ""
-            if status_fn is not None:
-                live = status_fn()
-                if live:
-                    suffix = f"  ·  {live}"
-            # \033[K clears to end-of-line so a shrinking suffix leaves no residue.
-            sys.stdout.write(f"\r{next(frames)} Working… {elapsed:4.1f}s{suffix}  (please wait)\033[K")
-            sys.stdout.flush()
-        worker.join(0.1)
+        try:
+            elapsed = time.perf_counter() - start
+            if elapsed >= _SPINNER_DELAY_S:
+                drawing = True
+                if interrupted:
+                    label, tail = "Stopping", "finishing current step…"
+                else:
+                    label, tail = "Working…", "(Ctrl+C to stop)"
+                    if status_fn is not None and (live := status_fn()):
+                        tail = f"{live}  ·  {tail}"
+                # \033[K clears to end-of-line so a shrinking suffix leaves no residue.
+                sys.stdout.write(f"\r{next(frames)} {label} {elapsed:4.1f}s  ·  {tail}\033[K")
+                sys.stdout.flush()
+            worker.join(0.1)
+        except KeyboardInterrupt:
+            # Let the in-flight step complete and persist; stop before the next one.
+            interrupted = True
     if drawing:
         # Erase the spinner line so it doesn't linger above the output.
         sys.stdout.write("\r\033[K")
@@ -391,7 +414,7 @@ def _run_with_spinner(fn: Callable[[], str], status_fn: Callable[[], str] | None
 
     if "error" in box:
         raise box["error"]
-    return box["value"]
+    return box.get("value"), interrupted
 
 
 # ── Banner ────────────────────────────────────────────────────────────────────

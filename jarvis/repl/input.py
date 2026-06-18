@@ -42,7 +42,7 @@ COMMAND_TREE: dict[str, dict] = {
     "session": {"chat": {}, "summary": {}, "api": {}},
     "thread":  {"summary": {}, "load": {}, "new": {}, "clear": {}, "rename": {}, "delete": {}},
     "config":  {"show": {}, "set": {}, "update": {}, "reset": {}},
-    "task":    {"new": {}, "list": {}, "show": {}, "start": {}, "run": {}, "next": {}, "back": {}, "replan": {}, "pause": {}, "delete": {}, "done": {}, "todo": {}},
+    "task":    {"new": {}, "list": {}, "show": {}, "start": {}, "run": {}, "pause": {}, "delete": {}, "done": {}, "todo": {}},
     "memory":  {"list": {}, "init": {}, "edit": {}, "show": {}, "load": {}, "unload": {}, "write": {}, "append": {}, "delete": {}},
     "personalize": {},
     "help":    {},
@@ -147,9 +147,12 @@ class InputController:
         self,
         status_fn: Callable[[], str] | None = None,
         progress_fn: Callable[[], str] | None = None,
+        hint_fn: Callable[[], str] | None = None,
     ) -> None:
         self._status_fn = status_fn
         self._progress_fn = progress_fn
+        # Optional context-aware placeholder; overrides the default when non-empty.
+        self._hint_fn = hint_fn
 
         # ── Mode ──────────────────────────────────────────────────────────────
         self._mode: str = "prompt"  # "prompt" | "command"
@@ -433,11 +436,11 @@ class InputController:
         return FormattedText(items)
 
     def _render_hint(self) -> FormattedText:
-        text = (
-            "Enter a request for the assistant..."
-            if self._mode == "prompt"
-            else "Enter a command..."
-        )
+        if self._mode == "command":
+            return FormattedText([("class:hint", "Enter a command...")])
+        # Prompt mode: a context-aware hint (e.g. an in-progress task) wins.
+        contextual = self._hint_fn() if self._hint_fn else ""
+        text = contextual or "Enter a request for the assistant..."
         return FormattedText([("class:hint", text)])
 
     def _line_prefix(self, line_number: int, wrap_count: int) -> FormattedText:
