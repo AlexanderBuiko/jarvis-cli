@@ -28,7 +28,7 @@ from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
 from prompt_toolkit.key_binding.bindings.emacs import load_emacs_bindings
 from prompt_toolkit.keys import Keys
-from prompt_toolkit.layout.containers import ConditionalContainer, Float, FloatContainer, HSplit, VSplit, Window
+from prompt_toolkit.layout.containers import ConditionalContainer, Float, FloatContainer, HSplit, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.layout import Layout
@@ -210,14 +210,12 @@ class InputController:
     def _build_app(self) -> Application:
         has_suggestions = Condition(lambda: bool(self._suggestions))
 
-        prefix_window = Window(
-            content=FormattedTextControl(self._render_prefix),
-            width=2,
-            dont_extend_width=True,
-        )
-
         is_empty = Condition(lambda: self._buffer.text == "")
 
+        # The prompt glyph is rendered as a per-line prefix *inside* the buffer
+        # window (not a separate column), so prompt_toolkit accounts for its
+        # width in cursor positioning even when the input soft-wraps. Wrapped
+        # continuation rows are indented to align under the first character.
         input_window = FloatContainer(
             content=Window(
                 content=BufferControl(buffer=self._buffer),
@@ -225,6 +223,7 @@ class InputController:
                 # beyond that the window scrolls to keep the cursor visible.
                 height=Dimension(min=1, max=MAX_INPUT_ROWS),
                 wrap_lines=True,
+                get_line_prefix=self._line_prefix,
                 dont_extend_height=True,
             ),
             floats=[
@@ -236,7 +235,8 @@ class InputController:
                         ),
                         filter=is_empty,
                     ),
-                    left=0,
+                    # Offset past the "> " prefix on the first row.
+                    left=2,
                     top=0,
                 )
             ],
@@ -260,7 +260,7 @@ class InputController:
                 )
             )
         containers += [
-            VSplit([prefix_window, input_window]),
+            input_window,
             suggestions_window,
         ]
 
@@ -305,9 +305,18 @@ class InputController:
         )
         return FormattedText([("class:hint", text)])
 
-    def _render_prefix(self) -> FormattedText:
-        glyph = ">" if self._mode == "prompt" else "!"
-        return FormattedText([("", glyph + " ")])
+    def _line_prefix(self, line_number: int, wrap_count: int) -> FormattedText:
+        """Per-line prefix for the input window.
+
+        The prompt glyph ("> " or "! ") is shown on the very first visual row;
+        wrapped/continuation rows get matching two-space indentation so the text
+        stays aligned. Rendering this inside the window keeps the cursor correct
+        when the input wraps.
+        """
+        if line_number == 0 and wrap_count == 0:
+            glyph = ">" if self._mode == "prompt" else "!"
+            return FormattedText([("", glyph + " ")])
+        return FormattedText([("", "  ")])
 
     def _render_suggestions(self) -> FormattedText:
         items = []
