@@ -264,6 +264,7 @@ class InputController:
                 "select.active": "#e5c07b bold",
             }),
             full_screen=False,
+            erase_when_done=True,  # remove the arrow menu once a choice is made
             mouse_support=False,
         )
         return app.run()

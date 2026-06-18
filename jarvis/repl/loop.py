@@ -206,9 +206,11 @@ def _drive_task(agent: JarvisAgent, controller: InputController, initial_pending
             title, options = _approval_prompt(result.stage)
             choice = controller.select(title, options)
             if choice == 0:
+                print(f"{title}  →  Confirmed\n")  # replaces the erased arrow menu
                 agent.advance_to(verdict.confirm_target)
                 continue
             if choice == 1:
+                print(f"{title}  →  Rejected\n")
                 problem = controller.read_text("What's the problem?")
                 agent.advance_to(verdict.reject_target)
                 pending = (
@@ -216,6 +218,7 @@ def _drive_task(agent: JarvisAgent, controller: InputController, initial_pending
                     if problem else "The user rejected this; please revise."
                 )
                 continue
+            print(f"{title}  →  (cancelled)\n")
             return "Paused. Run 'task run' to resume."
 
         if verdict and verdict.gate == GATE_QUESTION:
