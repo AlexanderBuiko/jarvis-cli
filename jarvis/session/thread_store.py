@@ -25,27 +25,25 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-_THREADS_DIR = Path.home() / ".jarvis" / "threads"
-_LEGACY_FILE = Path.home() / ".jarvis" / "history.json"
-
-
 class ThreadStore:
-    def __init__(self, directory: Path = _THREADS_DIR) -> None:
-        self._dir = directory
+    def __init__(self, directory: Path | None = None) -> None:
+        # Resolve home at instantiation (not import) so $HOME-based test isolation works.
+        self._dir = directory or (Path.home() / ".jarvis" / "threads")
+        self._legacy_file = self._dir.parent / "history.json"
 
     # ── Migration ──────────────────────────────────────────────────────────────
 
     def migrate_legacy(self) -> None:
         """Import ~/.jarvis/history.json as a thread named 'restored', then delete it."""
-        if not _LEGACY_FILE.exists():
+        if not self._legacy_file.exists():
             return
         try:
-            data = json.loads(_LEGACY_FILE.read_text(encoding="utf-8"))
+            data = json.loads(self._legacy_file.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             data = []
         thread_id = uuid4().hex[:8]
         self._write(thread_id, "restored", data)
-        _LEGACY_FILE.unlink(missing_ok=True)
+        self._legacy_file.unlink(missing_ok=True)
 
     # ── Core operations ────────────────────────────────────────────────────────
 

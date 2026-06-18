@@ -1,11 +1,9 @@
 """
-Integration tests for the mentor's two required behaviours:
+Integration tests for pause/resume behaviour against the real JarvisAgent.
 
-  * pausing at any phase (state is preserved),
-  * resuming without repeated explanations (a fresh thread still knows the plan).
-
-These drive the real JarvisAgent against a FakeEngine, with $HOME pointed at a
-temp dir so all of ~/.jarvis (threads, tasks, sessions, memory) is isolated.
+$HOME points at a temp dir so all of ~/.jarvis (threads, tasks, sessions, memory)
+is isolated per test. The pipeline is driven via agent.pipeline_step() +
+agent.advance_to() — the same primitives the interactive driver uses.
 """
 
 import os
@@ -14,18 +12,23 @@ import unittest
 
 from jarvis.agent import JarvisAgent
 from jarvis.config.manager import ConfigManager
+from jarvis.pipeline.base import GATE_APPROVAL
 from tests.fake_engine import FakeEngine
 
+PLAN = "1. build the thing\n2. test the thing"
 
-def _pipeline_responder(messages, params):
-    """Answer stage entry messages with marker-tagged text; plain text otherwise."""
+
+def _responder(messages, params):
+    """Stage-aware fake replies keyed on the entry/last message."""
     last = messages[-1]["content"]
-    if "enough to write a plan" in last:        # clarifier entry
+    if "enough to write a plan" in last:          # clarifier entry
         return "Understood the task.\n[[READY]]"
-    if "Produce the concrete" in last:          # planner entry
-        return "THE PLAN: step 1, step 2.\n[[READY]]"
-    if "executing the approved plan" in last:   # executor entry
-        return "Starting; I need your input.\n[[NEEDS_USER]]"
+    if "Produce the concrete" in last:            # planner entry
+        return PLAN                               # no marker -> approval gate
+    if "Work on step 1" in last:                  # first execution step
+        return "Built it.\n[[STEP_DONE]]"
+    if "Work on step" in last:                    # later execution step
+        return "Need your input.\n[[NEEDS_USER]]"
     return "ok"
 
 
@@ -44,49 +47,56 @@ class PauseResumeTest(unittest.TestCase):
         engine = FakeEngine(responder=responder)
         return engine, JarvisAgent(engine, ConfigManager())
 
-    def test_pause_at_any_phase_preserves_state(self):
-        # Drive the pipeline to a gate at execution (plan recorded), then pause.
-        engine, agent = self._agent(_pipeline_responder)
+    def _drive_into_execution(self, agent):
+        """clarification -> planning -> (confirm plan) -> execution (one step done)."""
+        agent.pipeline_step()                         # clarification READY -> planning
+        r = agent.pipeline_step()                     # planning -> approval gate
+        self.assertEqual(r.verdict.gate, GATE_APPROVAL)
+        agent.advance_to(r.verdict.confirm_target)    # Confirm -> execution
+        agent.pipeline_step()                         # execution step 1 -> STEP_DONE
+
+    def test_pause_at_execution_preserves_state(self):
+        _, agent = self._agent(_responder)
         agent.create_task("demo")
-        agent.run_task()
+        self._drive_into_execution(agent)
 
         self.assertEqual(agent.active_task["stage"], "execution")
-        self.assertIn("THE PLAN", agent.active_task["plan"])
+        self.assertIn("build the thing", agent.active_task["plan"])
+        self.assertEqual(agent.active_task["step_index"], 1)
 
-        paused = agent.pause_task()
-        self.assertEqual(paused, "demo")
+        self.assertEqual(agent.pause_task(), "demo")
         self.assertIsNone(agent.active_task)
 
-        # The task file still holds the stage and plan after pausing.
         task = agent._tasks.find("demo")
         self.assertEqual(task["stage"], "execution")
-        self.assertIn("THE PLAN", task["plan"])
+        self.assertIn("build the thing", task["plan"])
+        self.assertEqual(task["step_index"], 1)  # progress persisted
 
-    def test_resume_in_new_thread_without_re_explaining(self):
-        engine, agent = self._agent(_pipeline_responder)
+    def test_resume_continues_from_saved_step_without_re_explaining(self):
+        engine, agent = self._agent(_responder)
         agent.create_task("demo")
-        agent.run_task()  # -> execution gate, plan recorded
+        self._drive_into_execution(agent)   # step_index now 1
         agent.pause_task()
 
-        # Brand-new, empty thread: no conversation history to lean on.
+        # Brand-new, empty thread.
         agent.new_thread("fresh")
         self.assertEqual(agent.history, [])
         self.assertTrue(agent.start_task("demo"))
 
-        engine.responder = lambda m, p: "We are mid-execution."
-        agent.chat("Where are we?")
+        # The executor's next entry message targets step 2 (resumes, not restarts).
+        from jarvis.pipeline.stages import ExecutorAgent
+        entry = ExecutorAgent().entry_message(agent.active_task)
+        self.assertIn("step 2 of 2", entry)
 
-        # The plan reached the model via the working-memory block, not history —
-        # the user never re-explained it in this thread.
+        # And the plan reached the model via the working-memory block, not history.
+        engine.responder = lambda m, p: "We are mid-execution.\n[[NEEDS_USER]]"
+        agent.pipeline_step()
         sent = engine.calls[-1][0]
         blob = "\n".join(m["content"] for m in sent)
-        self.assertIn("THE PLAN", blob)
-        # And it was not because the user typed it.
-        user_said = [m["content"] for m in sent if m["role"] == "user"]
-        self.assertFalse(any("THE PLAN" in u and "Where are we" in u for u in user_said))
+        self.assertIn("build the thing", blob)
 
     def test_pause_with_no_active_task_is_noop(self):
-        engine, agent = self._agent()
+        _, agent = self._agent()
         self.assertIsNone(agent.pause_task())
 
 

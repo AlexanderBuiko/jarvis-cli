@@ -172,21 +172,27 @@ prompt and (later) tools. An **orchestrator** drives the FSM across these agents
 | Command | Description |
 |---|---|
 | `task new [name]` | Create a task and link it to this thread |
-| `task run` | Drive the pipeline autonomously to the next gate or done |
-| `task next` / `task back` / `task replan` | Step a transition manually |
+| `task run` | Drive the pipeline interactively to the next pause or done |
 | `task start <name-or-id>` | Resume an existing task (here or in another thread) |
 | `task pause` | Unlink the active task (state preserved) |
 | `task show` / `task list` | Inspect task state |
 
-With `task_autonomy=auto` (the default), `task run` rolls **forward** through
-stages on its own and stops only at a gate — clarification questions, a
-validation failure, or a replan. Backward edges are always manual. Every advance
-goes through the code-enforced `ALLOWED_TRANSITIONS`; the model never moves itself.
+`task run` drives the task and **pauses only when it needs you**:
+
+- a **free-text question** — clarification, or an execution step that needs input;
+- a **Confirm / Reject** choice at the two critical gates — **plan approval** and the
+  final **done** decision. The choices show vertically with an arrow (↑/↓ to move,
+  Enter to select). **Reject** asks *"What's the problem?"* and reworks with your
+  feedback (plan → regenerate; done → back to execution).
+
+Everything in between — clarification→planning, each execution step,
+execution→validation — runs **automatically**. Every transition still goes through
+the code-enforced `ALLOWED_TRANSITIONS`; the model never moves itself.
 
 **Live progress.** Planning parses the plan into discrete steps; execution then
-works **one step per turn**. During execution a live panel sits above the input
-line showing the full plan with each step marked ✓ completed · ▶ in-progress ·
-○ pending, and the spinner reports `executing step k/n` as it advances.
+works **one step per turn**, printing each step's result as it completes, with the
+spinner reporting `executing step k/n`. A progress panel (✓ completed · ▶ in-progress
+· ○ pending) also appears above the input line while a task is mid-flight.
 
 ## Architecture
 

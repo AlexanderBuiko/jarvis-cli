@@ -46,18 +46,6 @@ _ANSWER_LABELS: frozenset[str] = frozenset({"final_answer", "invariant_rework"})
 # profile from recent behaviour (`profile`). This is only a nudge — no LLM call.
 _PROFILE_NUDGE_INTERVAL: int = 5
 
-# Opening instruction generated when the user advances into a stage (`task next`),
-# so the new stage's work appears immediately without a separate user message.
-_STAGE_ENTRY_PROMPTS: dict[str, str] = {
-    "planning": "I'm ready to plan. Please produce the plan for this task.",
-    "execution": "The plan is approved. Let's begin execution — present the first step.",
-    "validation": "Execution is complete. Let's validate the result against the success criteria.",
-    "done": "The task is finished. Please give a brief closing summary.",
-}
-# Opening instruction for `task back` (validation → execution).
-_BACK_ENTRY_PROMPT: str = "Let's return to execution and keep working."
-
-
 class JarvisAgent:
     """
     Conversational agent that maintains history across turns.
@@ -143,18 +131,6 @@ class JarvisAgent:
         """
         response_text, _ = self._run_turn(entry_message, extra_system=extra_system or None)
         return response_text
-
-    def run_task(self):
-        """Drive the active task's FSM via the orchestrator. Returns StageResults.
-
-        Forward stages roll on automatically when task_autonomy is 'auto' (the
-        default); the run stops at the first gate (clarification/validation/replan)
-        or the terminal stage.
-        """
-        if self._active_task is None:
-            return None
-        autonomy = self._config.runtime.get("task_autonomy", "auto")
-        return self._orchestrator.run(self._active_task, self.run_stage_turn, autonomy)
 
     def _run_turn(self, user_input: str, *, extra_system: str | None = None) -> tuple[str, list[str]]:
         """Core request/response cycle. Returns (response_text, notices).
@@ -520,48 +496,30 @@ class JarvisAgent:
     def list_tasks(self) -> list[dict]:
         return self._tasks.list_all()
 
-    def next_stage(self) -> tuple[str | None, str]:
-        """Advance the active task to the next forward stage and continue.
+    def pipeline_step(self, extra_instruction: str = ""):
+        """Run one turn of the active task's pipeline via the orchestrator.
 
-        Deterministic, user-driven (`task next`). Records the leaving stage's
-        result, advances in code (ALLOWED_TRANSITIONS enforced), then generates
-        the new stage's opening reply. Returns (new_stage, reply_or_error).
+        Returns a StageResult (or None when there is no active task). The
+        interactive driver loops this, handling gates (questions and Confirm/
+        Reject approvals) between calls. extra_instruction carries a user's
+        answer or rework feedback into the next turn's entry message.
         """
-        return self._move_stage(None)
-
-    def back_stage(self) -> tuple[str | None, str]:
-        """Return a validation task to execution and continue (`task back`)."""
-        return self._move_stage("execution")
-
-    def replan_stage(self) -> tuple[str | None, str]:
-        """Return an execution task to planning to revise the plan (`task replan`)."""
-        return self._move_stage("planning")
-
-    def _move_stage(self, target: str | None) -> tuple[str | None, str]:
         if self._active_task is None:
-            return None, "No active task."
-        current = self._active_task["stage"]
-        # Record the leaving stage's result (last assistant message), and promote
-        # the key results into the canonical task fields so they appear in
-        # `task show` and carry to other threads — no extra LLM call needed.
-        last_asst = next(
-            (m["content"] for m in reversed(self._history) if m["role"] == "assistant"),
-            None,
-        )
-        if last_asst:
-            self._active_task.setdefault("stage_outputs", {})[current] = last_asst
-            if current == "clarification" and not self._active_task.get("description"):
-                self._active_task["description"] = last_asst
-            elif current == "planning":
-                self._active_task["plan"] = last_asst
-        try:
-            new_stage = self._tasks.advance_stage(self._active_task, target)
-        except ValueError as exc:
-            return None, f"Cannot move: {exc}."
-        # Generate the new stage's opening reply in the same step (advance + continue).
-        entry = _BACK_ENTRY_PROMPT if target == "execution" else _STAGE_ENTRY_PROMPTS.get(new_stage, "Continue.")
-        reply = self.chat(entry)
-        return new_stage, reply
+            return None
+        return self._orchestrator.step(self._active_task, self.run_stage_turn, extra_instruction)
+
+    def advance_to(self, target: str) -> str | None:
+        """Move the active task to target (code-enforced). A no-op if already there.
+
+        Used by the driver to apply an approval decision: Confirm advances to the
+        gate's confirm_target; Reject moves to its reject_target (which may be the
+        current stage, i.e. rework in place).
+        """
+        if self._active_task is None:
+            return None
+        if self._active_task["stage"] == target:
+            return target  # rework in place — stay in the stage
+        return self._tasks.advance_stage(self._active_task, target)
 
     def add_completed(self, item: str) -> bool:
         """Record a completed item on the active task. Returns False if no task."""

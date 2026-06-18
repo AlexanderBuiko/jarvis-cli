@@ -34,8 +34,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-_TASKS_DIR = Path.home() / ".jarvis" / "tasks"
-
 # Task state machine. Basic stages; expand with caution.
 STAGES: tuple[str, ...] = ("clarification", "planning", "execution", "validation", "done")
 
@@ -52,8 +50,9 @@ ALLOWED_TRANSITIONS: dict[str, list[str]] = {
 
 
 class TaskStore:
-    def __init__(self, directory: Path = _TASKS_DIR) -> None:
-        self._dir = directory
+    def __init__(self, directory: Path | None = None) -> None:
+        # Resolve home at instantiation (not import) so $HOME-based test isolation works.
+        self._dir = directory or (Path.home() / ".jarvis" / "tasks")
 
     # ── Core operations ────────────────────────────────────────────────────────
 

@@ -59,20 +59,20 @@ Commands
   task new [name]               Create a task and link it to this thread
   task list                     List all saved tasks and their stages
   task start <name-or-id>       Resume an existing task in this thread
-  task run                      Drive the pipeline autonomously to the next gate or done
-  task next                     Advance one stage manually and continue
-  task back                     Return validation → execution
-  task replan                   Return execution → planning to revise the plan
+  task run                      Drive the pipeline interactively to the next pause or done
   task pause                    Unlink the active task (state preserved)
   task delete <name-or-id>      Permanently delete a task
   task done <item>              Record a completed item on the active task
   task todo <item>              Record a remaining item on the active task
 
-  Stages: clarification → planning → execution → validation → done.
-  Stage transitions are always enforced in code (ALLOWED_TRANSITIONS). With
-  task_autonomy=auto (default), 'task run' rolls forward through stages and stops
-  only at a gate: clarification questions, validation failure, or a replan. Backward
-  edges (task back / task replan) are always manual. You can also step with 'task next'.
+  Stages: clarification → planning → execution → validation → done (enforced in code).
+  'task run' drives the task and pauses only when it needs you:
+    • a free-text question (clarification, or an execution step needing input), or
+    • a Confirm / Reject choice at the two critical gates — plan approval and the
+      final done decision (↑/↓ to move the arrow, Enter to choose). Reject asks
+      "What's the problem?" and reworks with your feedback.
+  Everything in between (clarification→planning, each execution step,
+  execution→validation) runs automatically.
 
   memory                        List long-term memory files
   memory init                   Scaffold always-on profile.md + invariants.md
@@ -118,11 +118,6 @@ Parameters
                              Can only be changed on an empty thread.
 
   window_size        int    Number of turns kept when context_strategy=sliding_window (default: 10)
-
-  task_autonomy      auto | manual
-                             auto   — 'task run' rolls the pipeline forward through
-                                      stages to the next gate or done (default)
-                             manual — 'task run' executes only the current stage
 """
 
 
@@ -383,23 +378,20 @@ def _format_task(task: dict) -> str:
         lines.append(f"  Step:    {task['current_step']}")
     if task.get("expected_action"):
         lines.append(f"  Next:    {task['expected_action']}")
-    if task.get("description"):
-        lines.append(f"  Goal:    {task['description']}")
+
+    # Progress checklist (plan steps with status). The plan itself lives in the
+    # stage results below, so we don't repeat it here.
     progress = render_plan_progress(task)
     if progress:
         lines += [""]
         lines += [f"  {ln}" for ln in progress.splitlines()]
-    elif task.get("plan"):
-        lines += ["", "  Plan:"]
-        lines += [f"    {ln}" for ln in task["plan"].splitlines()]
-    if task.get("completed"):
-        lines += ["", "  Completed:"]
-        lines += [f"    - {item}" for item in task["completed"]]
-    if task.get("remaining"):
-        lines += ["", "  Remaining:"]
-        lines += [f"    - {item}" for item in task["remaining"]]
+
     if task.get("notes"):
         lines += ["", f"  Notes:   {task['notes']}"]
+
+    # Stage results are the single source for each stage's output (clarification
+    # understanding, the plan, the per-step execution log, validation findings).
+    # Goal and Plan are intentionally not shown separately — they live here.
     outputs = task.get("stage_outputs") or {}
     ordered = [s for s in ("clarification", "planning", "execution", "validation") if s in outputs]
     if ordered:
@@ -469,64 +461,6 @@ def handle_task_delete(args: list[str], agent: JarvisAgent) -> str:
     if name is None:
         return f"Task not found: '{' '.join(args)}'."
     return f"Task '{name}' deleted."
-
-
-def handle_task_next(agent: JarvisAgent) -> str:
-    if agent.active_task is None:
-        return "No active task. Use 'task new <name>' first."
-    new_stage, reply = agent.next_stage()
-    if new_stage is None:
-        return reply  # error message
-    return f"[Task moved to stage: {new_stage}]\n\nA: {reply}"
-
-
-def handle_task_back(agent: JarvisAgent) -> str:
-    if agent.active_task is None:
-        return "No active task. Use 'task new <name>' first."
-    new_stage, reply = agent.back_stage()
-    if new_stage is None:
-        return reply
-    return f"[Task moved to stage: {new_stage}]\n\nA: {reply}"
-
-
-def handle_task_replan(agent: JarvisAgent) -> str:
-    if agent.active_task is None:
-        return "No active task. Use 'task new <name>' first."
-    new_stage, reply = agent.replan_stage()
-    if new_stage is None:
-        return reply
-    return f"[Task moved to stage: {new_stage}]\n\nA: {reply}"
-
-
-def handle_task_run(agent: JarvisAgent) -> str:
-    """Drive the task pipeline autonomously to the next gate (or done)."""
-    if agent.active_task is None:
-        return "No active task. Use 'task new <name>' first."
-    results = agent.run_task()
-    if not results:
-        return "No active task. Use 'task new <name>' first."
-
-    blocks: list[str] = []
-    for r in results:
-        if r.blocked:
-            blocks.append(f"[{r.stage}] blocked: {r.blocked}")
-            continue
-        header = f"[{r.stage}]"
-        if r.advanced_to:
-            header += f" → {r.advanced_to}"
-        blocks.append(f"{header}\n{r.text}")
-
-    last = results[-1]
-    if last.blocked:
-        footer = "Input requirement not met — resolve it and run 'task run' again."
-    elif agent.active_task and agent.active_task["stage"] == "done":
-        footer = "Pipeline complete — task is done."
-    elif last.verdict and last.verdict.needs_user:
-        action = last.verdict.expected_action
-        footer = f"Paused for you ({action}). Reply, then run 'task run' to continue."
-    else:
-        footer = "Paused. Run 'task run' to continue."
-    return "\n\n".join(blocks + ["─" * 60, footer])
 
 
 def handle_task_done(args: list[str], agent: JarvisAgent) -> str:

@@ -16,15 +16,16 @@ orchestrator-driven runs and are stripped from the displayed reply.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-# Control markers a stage agent may emit.
-MARKER_READY = "[[READY]]"          # output contract met; advance on the default forward edge
-MARKER_NEEDS_USER = "[[NEEDS_USER]]"  # stage needs the user before it can complete (gate)
+# Control markers a stage agent may emit. The model signals; code decides.
+MARKER_READY = "[[READY]]"          # stage's work is complete -> advance / present approval gate
+MARKER_NEEDS_USER = "[[NEEDS_USER]]"  # stage needs a free-text answer from the user (question gate)
 MARKER_STEP_DONE = "[[STEP_DONE]]"  # execution: this plan step is done, more remain (stay in stage)
-MARKER_PASS = "[[PASS]]"            # validation: criteria met -> done
-MARKER_FAIL = "[[FAIL]]"            # validation: criteria not met -> back to execution
-MARKER_REPLAN = "[[REPLAN]]"        # execution: the plan must change -> back to planning
 
-ALL_MARKERS = (MARKER_READY, MARKER_NEEDS_USER, MARKER_STEP_DONE, MARKER_PASS, MARKER_FAIL, MARKER_REPLAN)
+ALL_MARKERS = (MARKER_READY, MARKER_NEEDS_USER, MARKER_STEP_DONE)
+
+# Gate kinds — how the driver must pause.
+GATE_QUESTION = "question"   # agent asked something; read a free-text answer and continue
+GATE_APPROVAL = "approval"   # present a Confirm / Reject choice at a critical decision point
 
 
 def parse_markers(text: str) -> tuple[str, set[str]]:
@@ -43,21 +44,21 @@ def parse_markers(text: str) -> tuple[str, set[str]]:
 class StageVerdict:
     """The interpreted outcome of running a stage once."""
     clean_text: str = ""
-    ready: bool = False           # output contract satisfied -> eligible to advance
-    needs_user: bool = False      # stop and wait for the user (gate)
+    ready: bool = False           # output contract satisfied -> auto-advance on the forward edge
     continue_stage: bool = False  # made progress, more work remains -> re-run this same stage
-    next_target: str | None = None  # explicit branch target; None = default forward edge
-    expected_action: str = ""     # machine-readable next action (see EXPECTED_ACTIONS)
+    gate: str | None = None       # GATE_QUESTION / GATE_APPROVAL -> the driver must pause
+    next_target: str | None = None     # forward target when ready (None = default forward edge)
+    confirm_target: str | None = None  # approval gate: where Confirm advances to
+    reject_target: str | None = None   # approval gate: where Reject reworks (may be current stage)
+    expected_action: str = ""     # machine-readable next action (see below)
 
 
 # Machine-readable expected_action vocabulary (stored on the task).
 EXPECTED_AWAIT_USER = "await_user"
 EXPECTED_READY_TO_PLAN = "ready_to_plan"
-EXPECTED_READY_TO_EXECUTE = "ready_to_execute"
+EXPECTED_AWAIT_PLAN_APPROVAL = "await_plan_approval"
 EXPECTED_READY_TO_VALIDATE = "ready_to_validate"
-EXPECTED_READY_TO_FINISH = "ready_to_finish"
-EXPECTED_NEEDS_REWORK = "needs_rework"
-EXPECTED_NEEDS_REPLAN = "needs_replan"
+EXPECTED_AWAIT_DONE_APPROVAL = "await_done_approval"
 EXPECTED_IN_PROGRESS = "in_progress"
 EXPECTED_STEP_DONE = "step_done"
 EXPECTED_DONE = "done"

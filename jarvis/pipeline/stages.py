@@ -14,19 +14,15 @@ loops; the user is asked to confirm a rework or a replan.
 import re
 
 from .base import (
-    MARKER_FAIL,
+    GATE_APPROVAL,
+    GATE_QUESTION,
     MARKER_NEEDS_USER,
-    MARKER_PASS,
     MARKER_READY,
-    MARKER_REPLAN,
     MARKER_STEP_DONE,
+    EXPECTED_AWAIT_DONE_APPROVAL,
+    EXPECTED_AWAIT_PLAN_APPROVAL,
     EXPECTED_AWAIT_USER,
     EXPECTED_DONE,
-    EXPECTED_IN_PROGRESS,
-    EXPECTED_NEEDS_REPLAN,
-    EXPECTED_NEEDS_REWORK,
-    EXPECTED_READY_TO_EXECUTE,
-    EXPECTED_READY_TO_FINISH,
     EXPECTED_READY_TO_PLAN,
     EXPECTED_READY_TO_VALIDATE,
     EXPECTED_STEP_DONE,
@@ -63,7 +59,7 @@ class ClarifierAgent(StageAgent):
             "scope, and constraints are clear. Ask clarifying questions ONLY about details that are "
             "genuinely missing or ambiguous — do not ask about things the user already specified or "
             "that have a sensible default. When you believe you understand the task, briefly restate "
-            "your understanding and tell the user to run `task next` when they are ready to plan."
+            "your understanding."
         )
 
     def entry_message(self, task: dict) -> str:
@@ -75,14 +71,16 @@ class ClarifierAgent(StageAgent):
     def marker_protocol(self) -> str:
         return (
             "When you have enough information to produce a plan, end your reply with the line "
-            f"{MARKER_READY}. If you still need information from the user, end with {MARKER_NEEDS_USER}."
+            f"{MARKER_READY}. If you still need information from the user, ask your questions and end "
+            f"with {MARKER_NEEDS_USER}."
         )
 
     def interpret(self, markers: set[str]) -> StageVerdict:
         if MARKER_READY in markers:
+            # Enough understood — advance to planning automatically (no confirmation).
             return StageVerdict(ready=True, expected_action=EXPECTED_READY_TO_PLAN)
-        # Clarification is a user gate by nature: absent an explicit READY, wait.
-        return StageVerdict(needs_user=True, expected_action=EXPECTED_AWAIT_USER)
+        # Otherwise the agent needs answers: a free-text question gate.
+        return StageVerdict(gate=GATE_QUESTION, expected_action=EXPECTED_AWAIT_USER)
 
     def record(self, task: dict, clean_text: str, verdict: StageVerdict) -> None:
         super().record(task, clean_text, verdict)
@@ -95,16 +93,17 @@ class PlannerAgent(StageAgent):
 
     def system_fragment(self, task: dict) -> str:
         return (
-            "The active task is in the PLANNING stage. Produce a concrete, ordered plan that would "
-            "complete the task. Present the plan and invite the user to adjust it; tell them to run "
-            "`task next` when they approve it and want to start execution."
+            "The active task is in the PLANNING stage. Produce a concrete, ordered, numbered plan "
+            "that would complete the task. The user will review it and either approve it or ask for "
+            "changes."
         )
 
     def entry_message(self, task: dict) -> str:
-        return "Produce the concrete, ordered plan for this task now."
+        return "Produce the concrete, ordered, numbered plan for this task now."
 
     def marker_protocol(self) -> str:
-        return f"When the plan is complete, end your reply with the line {MARKER_READY}."
+        # No markers: producing a plan always leads to the plan-approval gate.
+        return ""
 
     def input_ready(self, task: dict) -> tuple[bool, str]:
         if not task.get("description") and "clarification" not in (task.get("stage_outputs") or {}):
@@ -112,9 +111,13 @@ class PlannerAgent(StageAgent):
         return True, ""
 
     def interpret(self, markers: set[str]) -> StageVerdict:
-        if MARKER_READY in markers:
-            return StageVerdict(ready=True, expected_action=EXPECTED_READY_TO_EXECUTE)
-        return StageVerdict(expected_action=EXPECTED_IN_PROGRESS)
+        # A finished plan is a critical decision point: present Confirm / Reject.
+        return StageVerdict(
+            gate=GATE_APPROVAL,
+            confirm_target="execution",
+            reject_target="planning",   # reject reworks the plan in place
+            expected_action=EXPECTED_AWAIT_PLAN_APPROVAL,
+        )
 
     def record(self, task: dict, clean_text: str, verdict: StageVerdict) -> None:
         super().record(task, clean_text, verdict)
@@ -130,9 +133,9 @@ class ExecutorAgent(StageAgent):
 
     def system_fragment(self, task: dict) -> str:
         return (
-            "The active task is in the EXECUTION stage. Carry out the plan: present the work (e.g. the "
-            "problems to solve) and respond to the user's results as they come. When the planned work "
-            "is finished, tell the user to run `task next` to move to validation."
+            "The active task is in the EXECUTION stage. Carry out the approved plan one step at a "
+            "time, reporting the result of each step. If you need information from the user to "
+            "proceed, ask for it."
         )
 
     def entry_message(self, task: dict) -> str:
@@ -149,9 +152,8 @@ class ExecutorAgent(StageAgent):
         return (
             "Work on the single current step only. End your reply with "
             f"{MARKER_STEP_DONE} if that step is done and further steps remain; with "
-            f"{MARKER_READY} if that was the last step and all planned work is finished; with "
-            f"{MARKER_NEEDS_USER} if you need the user's input to continue; or with {MARKER_REPLAN} "
-            "if the plan itself must change."
+            f"{MARKER_READY} if that was the last step and all planned work is finished; or with "
+            f"{MARKER_NEEDS_USER} if you need the user's input to continue."
         )
 
     def input_ready(self, task: dict) -> tuple[bool, str]:
@@ -160,29 +162,31 @@ class ExecutorAgent(StageAgent):
         return True, ""
 
     def interpret(self, markers: set[str]) -> StageVerdict:
-        if MARKER_REPLAN in markers:
-            # Backward branch -> gate: ask the user to confirm a replan.
-            return StageVerdict(
-                needs_user=True, next_target="planning", expected_action=EXPECTED_NEEDS_REPLAN
-            )
         if MARKER_READY in markers:
+            # All steps done — advance to validation automatically.
             return StageVerdict(ready=True, expected_action=EXPECTED_READY_TO_VALIDATE)
         if MARKER_STEP_DONE in markers:
             # Progress: this step is complete, but more remain — re-run execution.
             return StageVerdict(continue_stage=True, expected_action=EXPECTED_STEP_DONE)
-        return StageVerdict(needs_user=True, expected_action=EXPECTED_AWAIT_USER)
+        # The agent needs the user's input to continue this step: free-text gate.
+        return StageVerdict(gate=GATE_QUESTION, expected_action=EXPECTED_AWAIT_USER)
 
     def record(self, task: dict, clean_text: str, verdict: StageVerdict) -> None:
-        super().record(task, clean_text, verdict)
         steps = task.get("plan_steps") or []
-        if verdict.expected_action == EXPECTED_STEP_DONE:
-            # Advance the in-progress pointer to the next step.
-            task["step_index"] = min(task.get("step_index", 0) + 1, len(steps))
-        elif verdict.ready:
-            # All work finished — every step is complete.
-            task["step_index"] = len(steps)
         idx = task.get("step_index", 0)
-        task["current_step"] = steps[idx] if idx < len(steps) else ""
+        # Accumulate a per-step execution log so every step persists (and survives a
+        # thread switch), rather than overwriting with only the latest step.
+        outputs = task.setdefault("stage_outputs", {})
+        label = f"[step {idx + 1}/{len(steps)}]" if steps else "[step]"
+        prev = outputs.get("execution", "")
+        outputs["execution"] = (prev + "\n\n" if prev else "") + f"{label} {clean_text}"
+        # Advance the in-progress pointer.
+        if verdict.expected_action == EXPECTED_STEP_DONE:
+            task["step_index"] = min(idx + 1, len(steps))
+        elif verdict.ready:
+            task["step_index"] = len(steps)  # every step complete
+        new_idx = task.get("step_index", 0)
+        task["current_step"] = steps[new_idx] if new_idx < len(steps) else ""
 
 
 class ValidatorAgent(StageAgent):
@@ -191,19 +195,16 @@ class ValidatorAgent(StageAgent):
     def system_fragment(self, task: dict) -> str:
         return (
             "The active task is in the VALIDATION stage. Verify the result against the plan and the "
-            "success criteria. If the criteria are met, tell the user to run `task next` to finish the "
-            "task. If they are not met, explain what is wrong and tell the user to run `task back` to "
-            "return to execution."
+            "success criteria, and report clearly whether each criterion is met. The user will then "
+            "decide whether to finish the task or send it back for rework."
         )
 
     def entry_message(self, task: dict) -> str:
-        return "Validate the result against the plan and the success criteria."
+        return "Validate the result against the plan and the success criteria, and summarise findings."
 
     def marker_protocol(self) -> str:
-        return (
-            f"End your reply with {MARKER_PASS} if the success criteria are fully met, or {MARKER_FAIL} "
-            "if they are not."
-        )
+        # No markers: the human always decides at validation (Confirm = done, Reject = rework).
+        return ""
 
     def input_ready(self, task: dict) -> tuple[bool, str]:
         if not task.get("plan"):
@@ -211,14 +212,13 @@ class ValidatorAgent(StageAgent):
         return True, ""
 
     def interpret(self, markers: set[str]) -> StageVerdict:
-        if MARKER_PASS in markers:
-            return StageVerdict(ready=True, next_target="done", expected_action=EXPECTED_READY_TO_FINISH)
-        if MARKER_FAIL in markers:
-            # Backward branch -> gate: surface the failure, let the user drive rework.
-            return StageVerdict(
-                needs_user=True, next_target="execution", expected_action=EXPECTED_NEEDS_REWORK
-            )
-        return StageVerdict(needs_user=True, expected_action=EXPECTED_AWAIT_USER)
+        # Finishing the task is a critical decision point: present Confirm / Reject.
+        return StageVerdict(
+            gate=GATE_APPROVAL,
+            confirm_target="done",
+            reject_target="execution",  # reject sends it back for rework
+            expected_action=EXPECTED_AWAIT_DONE_APPROVAL,
+        )
 
 
 class DoneAgent(StageAgent):

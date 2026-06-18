@@ -1,11 +1,13 @@
 """
-Orchestrator — drives the task finite state machine across the stage agents.
+Orchestrator — runs the task finite state machine one turn at a time.
 
-It is the only component that advances stages during an autonomous run, and it
-always advances through TaskStore.advance_stage (so ALLOWED_TRANSITIONS is
-enforced in code — the LLM never self-transitions). Forward edges roll on
-automatically when a stage reports [[READY]]; backward branches are surfaced as
-gates so the pipeline cannot silently loop.
+It executes the current stage's agent once and, when that stage's work is
+complete with no decision needed, advances on the forward edge (always through
+TaskStore.advance_stage, so ALLOWED_TRANSITIONS stays the single code-enforced
+source of truth — the LLM never self-transitions). When a stage hits a gate
+(a free-text question, or a critical Confirm/Reject approval) it stops and
+returns; the interactive driver (jarvis/repl/loop.py) handles the gate and calls
+step() again. This keeps the FSM logic here and the I/O in the driver.
 """
 
 from dataclasses import dataclass
@@ -16,11 +18,11 @@ from .base import StageAgent, StageVerdict
 
 @dataclass
 class StageResult:
-    """One stage execution within an orchestrator run."""
+    """The outcome of running one stage turn."""
     stage: str
     text: str = ""
     verdict: StageVerdict | None = None
-    blocked: str | None = None   # set when the stage's input contract was not satisfied
+    blocked: str | None = None      # set when the stage's input contract was not satisfied
     advanced_to: str | None = None  # the stage advanced to afterwards, if any
 
 
@@ -29,53 +31,40 @@ RunTurn = Callable[[str, str], str]
 
 
 class Orchestrator:
-    # Safety cap so a misbehaving model can never loop the FSM forever. Generous
-    # enough for step-wise execution of a multi-step plan plus the other stages.
-    MAX_STEPS = 40
-
     def __init__(self, agents: dict[str, StageAgent], tasks) -> None:
         self._agents = agents
         self._tasks = tasks
 
-    def run(self, task: dict, run_turn: RunTurn, autonomy: str) -> list[StageResult]:
-        """Drive the FSM from the task's current stage.
+    def step(self, task: dict, run_turn: RunTurn, extra_instruction: str = "") -> StageResult:
+        """Run the current stage's agent once and return the result.
 
-        Runs the current stage's agent; on [[READY]] (and autonomy == 'auto')
-        advances on the chosen edge and continues, until a gate (needs_user /
-        not ready / blocked input), the terminal stage, or MAX_STEPS.
+        extra_instruction (e.g. a user's answer or rework feedback) is appended to
+        the stage's entry message for this turn only. Auto-advances on the forward
+        edge when the stage reports ready with no gate; otherwise returns at the
+        gate / progress point for the driver to handle.
         """
-        results: list[StageResult] = []
-        for _ in range(self.MAX_STEPS):
-            stage = task["stage"]
-            agent = self._agents.get(stage)
-            if agent is None or stage == "done":
-                break
+        stage = task["stage"]
+        agent = self._agents.get(stage)
+        if agent is None:
+            return StageResult(stage=stage, blocked=f"no agent for stage '{stage}'")
 
-            ok, reason = agent.input_ready(task)
-            if not ok:
-                results.append(StageResult(stage=stage, blocked=reason))
-                break
+        ok, reason = agent.input_ready(task)
+        if not ok:
+            return StageResult(stage=stage, blocked=reason)
 
-            raw = run_turn(agent.entry_message(task), agent.marker_protocol())
-            verdict = agent.process(task, raw)
+        entry = agent.entry_message(task)
+        if extra_instruction:
+            entry = f"{entry}\n\n{extra_instruction}"
+        raw = run_turn(entry, agent.marker_protocol())
+        verdict = agent.process(task, raw)
+        self._tasks.save(task)
+        result = StageResult(stage=stage, text=verdict.clean_text, verdict=verdict)
+
+        # A gate or in-stage progress: stop here, the driver decides what is next.
+        if verdict.gate or verdict.continue_stage:
+            return result
+        # Stage complete with no decision needed: advance on the forward edge.
+        if verdict.ready:
+            result.advanced_to = self._tasks.advance_stage(task, verdict.next_target)
             self._tasks.save(task)
-            result = StageResult(stage=stage, text=verdict.clean_text, verdict=verdict)
-            results.append(result)
-
-            if verdict.needs_user:
-                break
-            # Made progress within the stage (e.g. one plan step done) — re-run the
-            # same stage rather than advancing, so step-wise work continues.
-            if verdict.continue_stage:
-                if autonomy != "auto":
-                    break
-                continue
-            if not verdict.ready:
-                break
-            if autonomy != "auto":
-                break
-
-            new_stage = self._tasks.advance_stage(task, verdict.next_target)
-            self._tasks.save(task)
-            result.advanced_to = new_stage
-        return results
+        return result

@@ -3,11 +3,10 @@
 import unittest
 
 from jarvis.pipeline.base import (
-    MARKER_FAIL,
+    GATE_APPROVAL,
+    GATE_QUESTION,
     MARKER_NEEDS_USER,
-    MARKER_PASS,
     MARKER_READY,
-    MARKER_REPLAN,
     MARKER_STEP_DONE,
     parse_markers,
 )
@@ -36,18 +35,18 @@ class ParseMarkersTest(unittest.TestCase):
 
 
 class ClarifierTest(unittest.TestCase):
-    def test_ready_marker_advances(self):
+    def test_ready_marker_advances_to_planning(self):
         task = {"stage": "clarification"}
         v = ClarifierAgent().process(task, "I understand the task.\n" + MARKER_READY)
         self.assertTrue(v.ready)
-        self.assertFalse(v.needs_user)
+        self.assertIsNone(v.gate)
         self.assertEqual(task["expected_action"], "ready_to_plan")
         self.assertEqual(task["description"], "I understand the task.")
 
-    def test_no_marker_is_a_user_gate(self):
+    def test_no_marker_is_a_question_gate(self):
         task = {"stage": "clarification"}
         v = ClarifierAgent().process(task, "Which database should I use?")
-        self.assertTrue(v.needs_user)
+        self.assertEqual(v.gate, GATE_QUESTION)
         self.assertFalse(v.ready)
         self.assertEqual(task["expected_action"], "await_user")
 
@@ -59,14 +58,16 @@ class PlannerTest(unittest.TestCase):
         ok, _ = PlannerAgent().input_ready({"stage": "planning", "description": "x"})
         self.assertTrue(ok)
 
-    def test_ready_records_and_parses_plan(self):
+    def test_plan_presents_approval_gate_and_parses_steps(self):
         task = {"stage": "planning", "description": "x"}
-        v = PlannerAgent().process(task, "1. do a\n2. do b\n" + MARKER_READY)
-        self.assertTrue(v.ready)
+        v = PlannerAgent().process(task, "1. do a\n2. do b")
+        self.assertEqual(v.gate, GATE_APPROVAL)
+        self.assertEqual(v.confirm_target, "execution")
+        self.assertEqual(v.reject_target, "planning")
         self.assertEqual(task["plan"], "1. do a\n2. do b")
         self.assertEqual(task["plan_steps"], ["do a", "do b"])
         self.assertEqual(task["step_index"], 0)
-        self.assertEqual(task["expected_action"], "ready_to_execute")
+        self.assertEqual(task["expected_action"], "await_plan_approval")
 
 
 class ParsePlanStepsTest(unittest.TestCase):
@@ -95,9 +96,18 @@ class ExecutorTest(unittest.TestCase):
         v = ExecutorAgent().process(task, "Did step a.\n" + MARKER_STEP_DONE)
         self.assertTrue(v.continue_stage)
         self.assertFalse(v.ready)
-        self.assertFalse(v.needs_user)
+        self.assertIsNone(v.gate)
         self.assertEqual(task["step_index"], 1)
         self.assertEqual(task["current_step"], "b")
+
+    def test_step_output_accumulates_per_step(self):
+        task = self._task()
+        ex = ExecutorAgent()
+        ex.process(task, "Did step a.\n" + MARKER_STEP_DONE)
+        ex.process(task, "Did step b.\n" + MARKER_STEP_DONE)
+        log = task["stage_outputs"]["execution"]
+        self.assertIn("[step 1/3] Did step a.", log)
+        self.assertIn("[step 2/3] Did step b.", log)
 
     def test_ready_marks_all_steps_done(self):
         task = self._task()
@@ -115,33 +125,20 @@ class ExecutorTest(unittest.TestCase):
         self.assertIn("step 2 of 3", msg)
         self.assertIn("b", msg)
 
-    def test_needs_user_gate(self):
+    def test_no_marker_is_a_question_gate(self):
         v = ExecutorAgent().process(self._task(), "What's your answer?\n" + MARKER_NEEDS_USER)
-        self.assertTrue(v.needs_user)
+        self.assertEqual(v.gate, GATE_QUESTION)
         self.assertFalse(v.ready)
-
-    def test_replan_is_a_backward_gate(self):
-        task = self._task()
-        v = ExecutorAgent().process(task, "The plan is wrong.\n" + MARKER_REPLAN)
-        self.assertTrue(v.needs_user)
-        self.assertEqual(v.next_target, "planning")
-        self.assertEqual(task["expected_action"], "needs_replan")
 
 
 class ValidatorTest(unittest.TestCase):
-    def test_pass_advances_to_done(self):
+    def test_validation_presents_approval_gate(self):
         task = {"stage": "validation", "plan": "p"}
-        v = ValidatorAgent().process(task, "All criteria met.\n" + MARKER_PASS)
-        self.assertTrue(v.ready)
-        self.assertEqual(v.next_target, "done")
-        self.assertEqual(task["expected_action"], "ready_to_finish")
-
-    def test_fail_is_a_backward_gate(self):
-        task = {"stage": "validation", "plan": "p"}
-        v = ValidatorAgent().process(task, "Missing error handling.\n" + MARKER_FAIL)
-        self.assertTrue(v.needs_user)
-        self.assertEqual(v.next_target, "execution")
-        self.assertEqual(task["expected_action"], "needs_rework")
+        v = ValidatorAgent().process(task, "All criteria met.")
+        self.assertEqual(v.gate, GATE_APPROVAL)
+        self.assertEqual(v.confirm_target, "done")
+        self.assertEqual(v.reject_target, "execution")
+        self.assertEqual(task["expected_action"], "await_done_approval")
 
 
 class RegistryTest(unittest.TestCase):

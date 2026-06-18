@@ -28,7 +28,7 @@ from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
 from prompt_toolkit.key_binding.bindings.emacs import load_emacs_bindings
 from prompt_toolkit.keys import Keys
-from prompt_toolkit.layout.containers import ConditionalContainer, Float, FloatContainer, HSplit, Window
+from prompt_toolkit.layout.containers import ConditionalContainer, Float, FloatContainer, HSplit, VSplit, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.layout import Layout
@@ -210,6 +210,106 @@ class InputController:
 
             return self._mode, text
 
+    # ── Inline selection / single-line prompts (used by the task driver) ──────────
+
+    def select(self, title: str, options: list[str], default: int = 0) -> int | None:
+        """Show a vertical option list; ↑/↓ moves the arrow, Enter selects.
+
+        Returns the chosen index, or None if cancelled (Ctrl+C / Ctrl+D).
+        """
+        state = {"idx": max(0, min(default, len(options) - 1))}
+        kb = KeyBindings()
+
+        @kb.add("up", eager=True)
+        def _up(event) -> None:
+            state["idx"] = (state["idx"] - 1) % len(options)
+            event.app.invalidate()
+
+        @kb.add("down", eager=True)
+        def _down(event) -> None:
+            state["idx"] = (state["idx"] + 1) % len(options)
+            event.app.invalidate()
+
+        @kb.add("enter")
+        def _enter(event) -> None:
+            event.app.exit(result=state["idx"])
+
+        @kb.add("c-c")
+        @kb.add("c-d")
+        def _cancel(event) -> None:
+            event.app.exit(result=None)
+
+        def render() -> FormattedText:
+            items: list = [("class:select.title", title + "\n")]
+            for i, opt in enumerate(options):
+                active = i == state["idx"]
+                arrow = "→ " if active else "  "
+                cls = "class:select.active" if active else "class:select.option"
+                items.append((cls, f"{arrow}{opt}\n"))
+            return FormattedText(items)
+
+        app = Application(
+            layout=Layout(HSplit([Window(content=FormattedTextControl(render), dont_extend_height=True)])),
+            key_bindings=kb,
+            style=Style.from_dict({
+                "select.title": "#8b9dc3 bold",
+                "select.option": "",
+                "select.active": "#e5c07b bold",
+            }),
+            full_screen=False,
+            mouse_support=False,
+        )
+        return app.run()
+
+    def read_text(self, label: str) -> str:
+        """Prompt for a single free-text line (e.g. 'What's the problem?'). Returns the text."""
+        buffer = Buffer(name="freetext", multiline=False)
+        kb = merge_key_bindings([self._freetext_bindings(buffer), load_emacs_bindings()])
+
+        prefix = Window(
+            content=FormattedTextControl(lambda: FormattedText([("class:freetext.label", label + " ")])),
+            dont_extend_width=True,
+            width=len(label) + 1,
+        )
+        field = Window(
+            content=BufferControl(buffer=buffer),
+            height=Dimension(min=1, max=MAX_INPUT_ROWS),
+            wrap_lines=True,
+            dont_extend_height=True,
+        )
+        app = Application(
+            layout=Layout(VSplit([prefix, field]), focused_element=buffer),
+            key_bindings=kb,
+            style=Style.from_dict({"freetext.label": "#8b9dc3 bold"}),
+            full_screen=False,
+            mouse_support=False,
+        )
+        result: dict = {}
+
+        def _run() -> str:
+            app.run()
+            return result.get("text", "")
+
+        # Stash the result via the binding closure.
+        self._freetext_result = result
+        return _run().strip()
+
+    def _freetext_bindings(self, buffer: Buffer) -> KeyBindings:
+        kb = KeyBindings()
+
+        @kb.add("enter")
+        def _enter(event) -> None:
+            self._freetext_result["text"] = buffer.text
+            event.app.exit()
+
+        @kb.add("c-c")
+        @kb.add("c-d")
+        def _cancel(event) -> None:
+            self._freetext_result["text"] = ""
+            event.app.exit()
+
+        return kb
+
     # ── Application construction ──────────────────────────────────────────────
 
     def _build_app(self) -> Application:
@@ -343,15 +443,15 @@ class InputController:
     def _line_prefix(self, line_number: int, wrap_count: int) -> FormattedText:
         """Per-line prefix for the input window.
 
-        The prompt glyph ("> " or "! ") is shown on the very first visual row;
-        wrapped/continuation rows get matching two-space indentation so the text
-        stays aligned. Rendering this inside the window keeps the cursor correct
-        when the input wraps.
+        The prompt glyph ("> " or "! ") is shown on the very first visual row.
+        Wrapped/continuation rows get no prefix, so long input does not pick up
+        stray leading spaces. Rendering this inside the window keeps the cursor
+        correct when the input wraps.
         """
         if line_number == 0 and wrap_count == 0:
             glyph = ">" if self._mode == "prompt" else "!"
             return FormattedText([("", glyph + " ")])
-        return FormattedText([("", "  ")])
+        return FormattedText([("", "")])
 
     def _render_suggestions(self) -> FormattedText:
         items = []
@@ -388,6 +488,10 @@ class InputController:
             hist = self._prompt_hist if self._mode == "prompt" else self._command_hist
             _add_history(hist, display)
             self._result = self._expand_pastes(self._buffer.text).strip()
+            # Clear the suggestion overlay so the accepted command's selection
+            # block does not linger above the printed output.
+            self._suggestions = []
+            self._suggestion_idx = 0
             event.app.exit()
 
         @kb.add(Keys.BracketedPaste)

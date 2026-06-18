@@ -34,10 +34,6 @@ from .commands import (
     handle_task_new,
     handle_task_list,
     handle_task_start,
-    handle_task_run,
-    handle_task_next,
-    handle_task_back,
-    handle_task_replan,
     handle_task_pause,
     handle_task_delete,
     handle_task_done,
@@ -58,6 +54,7 @@ from .input import InputController
 from ..agent import JarvisAgent
 from ..config.manager import ConfigManager
 from ..openrouter.client import DEFAULT_MODEL
+from ..pipeline.base import GATE_APPROVAL, GATE_QUESTION
 
 
 def run_repl(agent: JarvisAgent, config_manager: ConfigManager) -> None:
@@ -90,7 +87,7 @@ def run_repl(agent: JarvisAgent, config_manager: ConfigManager) -> None:
             sys.exit(0)
 
         if input_type == "command":
-            output = _dispatch(raw, agent, config_manager)
+            output = _dispatch(raw, agent, config_manager, controller)
         else:
             try:
                 output = f"A: {_run_with_spinner(lambda: agent.chat(raw))}"
@@ -102,6 +99,86 @@ def run_repl(agent: JarvisAgent, config_manager: ConfigManager) -> None:
             print()
 
 
+# ── Interactive task driver ─────────────────────────────────────────────────────
+
+# Safety cap on driver iterations (a misbehaving model can't loop forever).
+_MAX_DRIVE_TURNS = 60
+
+
+def _drive_task(agent: JarvisAgent, controller: InputController) -> str:
+    """Drive the active task's pipeline interactively to the next pause or done.
+
+    Runs one stage turn at a time (each with the spinner, so execution steps are
+    visible live), and pauses at gates: a free-text question, or a Confirm/Reject
+    approval (only at plan approval and the final done decision).
+    """
+    if agent.active_task is None:
+        return "No active task. Use 'task new <name>' first."
+
+    def _status() -> str:
+        t = agent.active_task
+        steps = t.get("plan_steps") if t else None
+        if t and t.get("stage") == "execution" and steps:
+            n = len(steps)
+            return f"executing step {min(t.get('step_index', 0) + 1, n)}/{n}"
+        return t.get("stage", "") if t else ""
+
+    pending = ""
+    for _ in range(_MAX_DRIVE_TURNS):
+        feedback = pending
+        try:
+            result = _run_with_spinner(lambda: agent.pipeline_step(feedback), status_fn=_status)
+        except Exception as exc:
+            return f"Error: {exc}"
+        pending = ""
+        if result is None:
+            return "No active task."
+        if result.blocked:
+            return f"[{result.stage}] cannot start: {result.blocked}"
+
+        header = f"[{result.stage}]"
+        if result.advanced_to:
+            header += f" → {result.advanced_to}"
+        print(f"{header}\n{result.text}\n")
+
+        verdict = result.verdict
+        if verdict and verdict.gate == GATE_APPROVAL:
+            choice = controller.select(_approval_title(result.stage), ["Confirm", "Reject"])
+            if choice == 0:
+                agent.advance_to(verdict.confirm_target)
+                continue  # proceed (or run the done stage for a closing summary)
+            if choice == 1:
+                problem = controller.read_text("What's the problem?")
+                agent.advance_to(verdict.reject_target)
+                pending = (
+                    f"The user rejected this and asked for changes: {problem}\nRevise accordingly."
+                    if problem else "The user rejected this; please revise."
+                )
+                continue
+            return "Paused. Run 'task run' to resume."
+
+        if verdict and verdict.gate == GATE_QUESTION:
+            answer = controller.read_text("Your answer:")
+            if not answer:
+                return "Paused. Run 'task run' to resume."
+            pending = f"The user responded: {answer}"
+            continue
+
+        if agent.active_task and agent.active_task["stage"] == "done":
+            return "✓ Task complete."
+        # Otherwise (in-stage progress, or advanced with no gate) — keep driving.
+
+    return "Stopped after the step cap. Run 'task run' to continue."
+
+
+def _approval_title(stage: str) -> str:
+    if stage == "planning":
+        return "Approve this plan and start execution?"
+    if stage == "validation":
+        return "Mark this task as done?"
+    return "Proceed?"
+
+
 # ── Dispatcher ────────────────────────────────────────────────────────────────
 
 
@@ -109,6 +186,7 @@ def _dispatch(
     raw: str,
     agent: JarvisAgent,
     config_manager: ConfigManager,
+    controller: "InputController",
 ) -> str:
     tokens = raw.split()
     if not tokens:
@@ -176,21 +254,7 @@ def _dispatch(
         if sub == "start":
             return handle_task_start(args[1:], agent)
         if sub == "run":
-            def _run_status() -> str:
-                t = agent.active_task
-                steps = t.get("plan_steps") if t else None
-                if t and t.get("stage") == "execution" and steps:
-                    n = len(steps)
-                    cur = min(t.get("step_index", 0) + 1, n)
-                    return f"executing step {cur}/{n}"
-                return t.get("stage", "") if t else ""
-            return _run_with_spinner(lambda: handle_task_run(agent), status_fn=_run_status)
-        if sub == "next":
-            return handle_task_next(agent)
-        if sub == "back":
-            return handle_task_back(agent)
-        if sub == "replan":
-            return handle_task_replan(agent)
+            return _drive_task(agent, controller)
         if sub == "pause":
             return handle_task_pause(agent)
         if sub == "delete":
@@ -201,8 +265,7 @@ def _dispatch(
             return handle_task_todo(args[1:], agent)
         return (
             "Usage: task | task new [name] | task list | task start <name-or-id> | task run | "
-            "task next | task back | task replan | task pause | task delete <name-or-id> | "
-            "task done <item> | task todo <item>"
+            "task pause | task delete <name-or-id> | task done <item> | task todo <item>"
         )
 
     if cmd == "memory":

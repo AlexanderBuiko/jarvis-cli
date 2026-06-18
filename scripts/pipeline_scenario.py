@@ -1,23 +1,16 @@
 """
-Pipeline scenario — the autonomous task FSM in action (`task run`).
+Pipeline scenario — the interactive task driver, run non-interactively.
 
-Shows the orchestrator rolling the finite state machine forward through stages
-on its own (task_autonomy=auto, the default) and stopping only at real gates:
-clarification questions and validation. The user never confirms a forward
-transition — they only answer when the pipeline asks.
-
-Flow:
-    task new
-    task run     -> clarification asks what it needs            (gate)
-    <answer>
-    task run     -> planning -> execution roll forward to a gate
-    <answer>
-    task run     -> validation -> done                          (rolls to the end)
+Demonstrates the gate model: the pipeline rolls forward on its own and pauses
+only at gates — free-text questions (clarification / execution) and the two
+Confirm/Reject approvals (plan approval, final done). Here those gates are
+answered programmatically (auto-confirm; canned answers) so the whole flow runs
+end to end without a human.
 
 Usage:
     python scripts/pipeline_scenario.py
 
-Requires OPENROUTER_API_KEY (real LLM calls, like task_scenario.py).
+Requires OPENROUTER_API_KEY (real LLM calls).
 """
 
 import sys
@@ -28,26 +21,36 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from jarvis.config.manager import ConfigManager
 from jarvis.openrouter.client import OpenRouterClient
 from jarvis.agent import JarvisAgent
+from jarvis.pipeline.base import GATE_APPROVAL, GATE_QUESTION
 
 SEP = "─" * 66
+_MAX_TURNS = 40
 
 
-def chat(agent: JarvisAgent, text: str) -> None:
-    print(f"\n[{agent.thread_name}] You: {text}")
-    print(f"Jarvis: {agent.chat(text)}")
+def auto_drive(agent: JarvisAgent, answers: list[str]) -> None:
+    """Drive the active task to done, auto-confirming approvals and feeding answers."""
+    answers = list(answers)
+    pending = ""
+    for _ in range(_MAX_TURNS):
+        feedback, pending = pending, ""
+        result = agent.pipeline_step(feedback)
+        if result is None or result.blocked:
+            print(f"  (stopped: {result.blocked if result else 'no task'})")
+            return
+        arrow = f" → {result.advanced_to}" if result.advanced_to else ""
+        print(f"\n[{result.stage}]{arrow}\n{result.text}")
 
-
-def task_run(agent: JarvisAgent) -> None:
-    print(f"\n[{agent.thread_name}] ! task run")
-    for r in agent.run_task():
-        if r.blocked:
-            print(f"  [{r.stage}] blocked: {r.blocked}")
-            continue
-        arrow = f" → {r.advanced_to}" if r.advanced_to else ""
-        print(f"  [{r.stage}]{arrow}")
-        print(f"    {r.text}")
-    t = agent.active_task
-    print(f"  (stage now: {t['stage']}, expected: {t['expected_action'] or '—'})")
+        verdict = result.verdict
+        if verdict.gate == GATE_APPROVAL:
+            print("  ▸ auto-Confirm")
+            agent.advance_to(verdict.confirm_target)
+        elif verdict.gate == GATE_QUESTION:
+            answer = answers.pop(0) if answers else "Proceed with sensible defaults."
+            print(f"  ▸ You: {answer}")
+            pending = f"The user responded: {answer}"
+        elif agent.active_task and agent.active_task["stage"] == "done":
+            print("\n✓ Task complete.")
+            return
 
 
 def main() -> None:
@@ -59,37 +62,28 @@ def main() -> None:
         sys.exit(1)
 
     config.set("seed", "42")  # reproducibility
-    # task_autonomy defaults to "auto"; set explicitly to make the demo obvious.
-    config.set("task_autonomy", "auto")
     agent = JarvisAgent(client, config)
 
     agent.new_thread("pipeline-demo")
     task = agent.create_task("packing_list")
     print(SEP)
     print(f"Thread = '{agent.thread_name}'   Task = {task['name']} ({task['id']})")
-    print("task_autonomy = auto  (forward stages roll on their own)")
+    print("Gates: free-text questions + Confirm/Reject at plan approval and done.")
     print(SEP)
 
-    # 1) First run: clarification should stop and ask what it needs.
-    task_run(agent)
-
-    # 2) Answer, then run again — planning and execution roll forward automatically.
-    chat(
+    auto_drive(
         agent,
-        "Make me a 3-item packing list for a weekend hiking trip. Keep the plan to "
-        "3 bullet points. In execution just produce the 3 items. Validation = the "
-        "list has exactly 3 hiking-appropriate items.",
+        answers=[
+            # Answer for the clarification question gate:
+            "Make a 3-item packing list for a weekend hiking trip. Plan = 3 numbered "
+            "steps, one per item. Execution produces each item. Done when there are "
+            "exactly 3 hiking-appropriate items.",
+        ],
     )
-    task_run(agent)
-
-    # 3) Provide any execution input it asked for, then finish the pipeline.
-    chat(agent, "Looks good, go ahead and finalise it.")
-    task_run(agent)
 
     print("\n" + SEP)
-    print("Done. The pipeline advanced through the stages by itself; the only manual")
-    print("inputs were answers at the clarification/execution gates — never a forward")
-    print("transition. Every advance still went through the code-enforced FSM.")
+    print("The pipeline advanced through the stages by itself, pausing only at gates;")
+    print("every stage transition still went through the code-enforced FSM.")
     print(SEP)
 
 

@@ -18,8 +18,6 @@ Two kinds of file:
 import re
 from pathlib import Path
 
-_MEMORY_DIR = Path.home() / ".jarvis" / "memory"
-
 # The profile section the refiner is allowed to rewrite. Constraints and Context
 # are user-authored only — changing them would affect Jarvis's behaviour and
 # overlap with the invariants, so the refiner never touches them.
@@ -48,8 +46,9 @@ _TEMPLATES: dict[str, str] = {
 
 
 class LongTermMemory:
-    def __init__(self, directory: Path = _MEMORY_DIR) -> None:
-        self._dir = directory
+    def __init__(self, directory: Path | None = None) -> None:
+        # Resolve home at instantiation (not import) so $HOME-based test isolation works.
+        self._dir = directory or (Path.home() / ".jarvis" / "memory")
 
     @staticmethod
     def normalize(name: str) -> str:
