@@ -27,6 +27,7 @@ from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
 from prompt_toolkit.key_binding.bindings.emacs import load_emacs_bindings
+from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout.containers import ConditionalContainer, Float, FloatContainer, HSplit, VSplit, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
@@ -50,6 +51,12 @@ COMMAND_TREE: dict[str, dict] = {
 
 MAX_SUGGESTIONS = 5
 SUGGESTION_COLOR = "#a1a9b7"
+
+# The input line soft-wraps and grows up to this many visual rows.
+MAX_INPUT_ROWS = 5
+# A clipboard paste at or above this many characters is collapsed to a short
+# placeholder in the buffer (the real text is restored on submit).
+PASTE_COLLAPSE_THRESHOLD = 1000
 
 
 # ── Suggestion logic ──────────────────────────────────────────────────────────
@@ -156,6 +163,10 @@ class InputController:
         # ── Result communicated from Enter handler ────────────────────────────
         self._result: str = ""
 
+        # ── Collapsed clipboard pastes (placeholder text -> real text) ────────
+        self._pastes: dict[str, str] = {}
+        self._paste_seq: int = 0
+
         # ── Build Application ─────────────────────────────────────────────────
         self._buffer = Buffer(
             name="input",
@@ -210,7 +221,10 @@ class InputController:
         input_window = FloatContainer(
             content=Window(
                 content=BufferControl(buffer=self._buffer),
-                height=Dimension(min=1, max=1),
+                # Soft-wrap long input and grow up to MAX_INPUT_ROWS rows;
+                # beyond that the window scrolls to keep the cursor visible.
+                height=Dimension(min=1, max=MAX_INPUT_ROWS),
+                wrap_lines=True,
                 dont_extend_height=True,
             ),
             floats=[
@@ -322,13 +336,24 @@ class InputController:
 
         @kb.add("enter")
         def _enter(event) -> None:
-            text = self._buffer.text.strip()
-            if not text:
+            display = self._buffer.text.strip()
+            if not display:
                 return
+            # History keeps the compact (collapsed) form; the agent receives the
+            # expanded text with any collapsed pastes restored to their content.
             hist = self._prompt_hist if self._mode == "prompt" else self._command_hist
-            _add_history(hist, text)
-            self._result = text
+            _add_history(hist, display)
+            self._result = self._expand_pastes(self._buffer.text).strip()
             event.app.exit()
+
+        @kb.add(Keys.BracketedPaste)
+        def _paste(event) -> None:
+            data = event.data
+            if len(data) >= PASTE_COLLAPSE_THRESHOLD:
+                placeholder = self._register_paste(data)
+                self._buffer.insert_text(placeholder)
+            else:
+                self._buffer.insert_text(data)
 
         @kb.add("up", eager=True)
         def _up(event) -> None:
@@ -423,6 +448,25 @@ class InputController:
             raise EOFError
 
         return kb
+
+    # ── Clipboard paste collapsing ──────────────────────────────────────────────
+
+    def _register_paste(self, data: str) -> str:
+        """Store a large paste and return the placeholder shown in the buffer."""
+        self._paste_seq += 1
+        placeholder = f"[Pasted from clipboard: {len(data)} characters]"
+        # Disambiguate the rare case of two same-length pastes coexisting.
+        if placeholder in self._pastes and self._pastes[placeholder] != data:
+            placeholder = f"[Pasted from clipboard: {len(data)} characters (#{self._paste_seq})]"
+        self._pastes[placeholder] = data
+        return placeholder
+
+    def _expand_pastes(self, text: str) -> str:
+        """Replace any paste placeholders in text with their real content."""
+        for placeholder, real in self._pastes.items():
+            if placeholder in text:
+                text = text.replace(placeholder, real)
+        return text
 
     # ── Buffer event ──────────────────────────────────────────────────────────
 

@@ -96,6 +96,7 @@ Commands
 Parameters
 ──────────
   model              str    OpenRouter model identifier
+                            Can only be changed on an empty thread.
   temperature        float  0.0 – 2.0   Sampling temperature
   top_p              float  0.0 – 1.0   Nucleus sampling probability
   top_k              int                Top-k sampling cutoff
@@ -166,7 +167,7 @@ def handle_thread_show(agent: JarvisAgent) -> str:
     turn_count = len(history) // 2
     tok = agent.thread_total_tokens
     cost = agent.thread_total_cost
-    tok_str = f"{tok:,} tok" if tok else "0 tok"
+    tok_str = f"{tok:,} tokens" if tok else "0 tokens"
     cost_str = f"  ${cost:.6f}" if cost else ""
     lines = [f"Conversation context ({turn_count} turn(s))  —  {tok_str}{cost_str}", ""]
     sep = "·" * 40
@@ -202,7 +203,7 @@ def handle_thread_load(args: list[str], agent: JarvisAgent) -> str:
             active_marker = " ←" if t["id"] == agent.thread_id else ""
             tok = t.get("total_tokens") or 0
             cost = t.get("total_cost") or 0.0
-            tok_str = f"{tok:>8,} tok" if tok else "       — tok"
+            tok_str = f"{tok:>8,} tokens" if tok else "       — tokens"
             cost_str = f"  ${cost:.6f}" if cost else ""
             lines.append(
                 f"  {t['name']:<20}  {t['id']}  {t['turns']:>3} turn(s)  {tok_str}{cost_str}{active_marker}"
@@ -266,7 +267,7 @@ def handle_thread_summary(
             if len(entry) > 3 and entry[3] is not None
         ]
         if ctx_series:
-            ctx_heading = f"Context Utilisation  (context window: {context_window:,} tok)"
+            ctx_heading = f"Context Utilisation  (context window: {context_window:,} tokens)"
             lines += [sep, ctx_heading, sep, ""]
             lines.append(f"  {'Turn':>4}  {'Context Tokens':>15}  {'Context':>8}")
             lines.append(f"  {'────':>4}  {'──────────────':>15}  {'───────':>8}")

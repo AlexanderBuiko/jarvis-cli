@@ -8,7 +8,11 @@ Reads user input via InputController and routes it by input type:
 All conversation and LLM logic lives in the agent; this module is pure UI.
 """
 
+import itertools
 import sys
+import threading
+import time
+from typing import Callable
 
 from .commands import (
     handle_help,
@@ -60,13 +64,13 @@ def run_repl(agent: JarvisAgent, config_manager: ConfigManager) -> None:
     print("Starts in prompt mode (>). Type ! on an empty line to switch modes.\n")
 
     def _status_fn() -> str:
-        tok = agent.last_context_tokens
+        tokens = agent.last_context_tokens
         model = config_manager.runtime.get("model") or DEFAULT_MODEL
         ctx = agent.get_context_window(model)
         if ctx:
-            pct = round(tok * 100 / ctx)
-            return f"{tok:,}/{ctx:,} ({pct}%) tok"
-        return f"{tok:,} tok"
+            pct = round(tokens * 100 / ctx)
+            return f"{tokens:,}/{ctx:,} ({pct}%) tokens"
+        return f"{tokens:,} tokens"
 
     controller = InputController(status_fn=_status_fn)
 
@@ -81,7 +85,7 @@ def run_repl(agent: JarvisAgent, config_manager: ConfigManager) -> None:
             output = _dispatch(raw, agent, config_manager)
         else:
             try:
-                output = f"A: {agent.chat(raw)}"
+                output = f"A: {_run_with_spinner(lambda: agent.chat(raw))}"
             except Exception as exc:
                 output = f"Error: {exc}"
 
@@ -118,20 +122,16 @@ def _dispatch(
         if sub == "show":
             return handle_config_show(config_manager)
         if sub == "set":
-            if _changes_context_strategy("set", args[1:]) and agent.history:
-                return (
-                    "context_strategy can only be changed on an empty thread. "
-                    "Use 'thread new' or 'thread clear' first."
-                )
+            locked = _locked_param_error("set", args[1:], agent)
+            if locked:
+                return locked
             return handle_config_set(args[1:], config_manager)
         if sub == "reset":
             return handle_config_reset(config_manager)
         if sub == "update":
-            if _changes_context_strategy("update", args[1:]) and agent.history:
-                return (
-                    "context_strategy can only be changed on an empty thread. "
-                    "Use 'thread new' or 'thread clear' first."
-                )
+            locked = _locked_param_error("update", args[1:], agent)
+            if locked:
+                return locked
             return handle_config_update(args[1:], config_manager)
         return f"Unknown config sub-command: '{sub}'"
 
@@ -168,7 +168,7 @@ def _dispatch(
         if sub == "start":
             return handle_task_start(args[1:], agent)
         if sub == "run":
-            return handle_task_run(agent)
+            return _run_with_spinner(lambda: handle_task_run(agent))
         if sub == "next":
             return handle_task_next(agent)
         if sub == "back":
@@ -233,13 +233,79 @@ def _dispatch(
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _changes_context_strategy(sub: str, args: list[str]) -> bool:
-    """Return True if this config command would change context_strategy."""
+# Parameters that pin to a thread: once the thread has messages they can no
+# longer be changed (the choice would invalidate the existing history). Each
+# maps to the noun used in the error message.
+_LOCKED_WHEN_NONEMPTY: dict[str, str] = {
+    "context_strategy": "context_strategy",
+    "model": "model",
+}
+
+
+def _changed_keys(sub: str, args: list[str]) -> set[str]:
+    """Return the config keys a 'set'/'update' command would change."""
     if sub == "set":
-        return bool(args) and args[0].lower() == "context_strategy"
+        return {args[0].lower()} if args else set()
     if sub == "update":
-        return any(a.lower().startswith("context_strategy=") for a in args)
-    return False
+        return {a.split("=", 1)[0].strip().lower() for a in args if "=" in a}
+    return set()
+
+
+def _locked_param_error(sub: str, args: list[str], agent: JarvisAgent) -> str | None:
+    """Return an error message if the command changes a locked param on a non-empty thread."""
+    if not agent.history:
+        return None
+    for key in _changed_keys(sub, args):
+        noun = _LOCKED_WHEN_NONEMPTY.get(key)
+        if noun:
+            return (
+                f"{noun} can only be changed on an empty thread. "
+                "Use 'thread new' or 'thread clear' first."
+            )
+    return None
+
+
+# Spinner frames for the in-progress animation (Braille spinner).
+_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+# Don't draw the spinner for operations that finish almost instantly.
+_SPINNER_DELAY_S = 0.25
+
+
+def _run_with_spinner(fn: Callable[[], str]) -> str:
+    """Run fn() on a worker thread while animating an elapsed-time spinner.
+
+    Signals that work is in progress and that input is not expected. The result
+    (or exception) of fn is returned (or re-raised) once it completes.
+    """
+    box: dict = {}
+
+    def _worker() -> None:
+        try:
+            box["value"] = fn()
+        except BaseException as exc:  # propagate to the caller's thread
+            box["error"] = exc
+
+    worker = threading.Thread(target=_worker, daemon=True)
+    worker.start()
+
+    frames = itertools.cycle(_SPINNER_FRAMES)
+    start = time.perf_counter()
+    drawing = False
+    while worker.is_alive():
+        elapsed = time.perf_counter() - start
+        if elapsed >= _SPINNER_DELAY_S:
+            drawing = True
+            sys.stdout.write(f"\r{next(frames)} Working… {elapsed:4.1f}s  (please wait)")
+            sys.stdout.flush()
+        worker.join(0.1)
+    if drawing:
+        # Erase the spinner line so it doesn't linger above the output.
+        sys.stdout.write("\r\033[K")
+        sys.stdout.flush()
+
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
 
 
 # ── Banner ────────────────────────────────────────────────────────────────────

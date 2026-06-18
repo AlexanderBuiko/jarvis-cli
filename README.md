@@ -56,6 +56,14 @@ python3 -m jarvis
 
 Any other input is sent to the agent as a message.
 
+### Input & status
+
+- The input line **soft-wraps** as you type and grows up to 5 rows for longer messages.
+- Pasting a large block (≥ 1000 characters) collapses it to `[Pasted from clipboard: N characters]` in the line; the full text is restored when you send.
+- While a request is running, a **spinner with elapsed time** shows that work is in progress and input isn't expected.
+- The status line shows context-window usage in tokens.
+- `model` and `context_strategy` are **locked once a thread has messages** — change them on a fresh thread (`thread new` / `thread clear`).
+
 ---
 
 ## Configuration
