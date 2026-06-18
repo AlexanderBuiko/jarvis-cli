@@ -14,8 +14,6 @@ fully independent of chat threads. It lives as a JSON file under
     "step_index":    2,            # index of the in-progress step (steps before it are done)
     "description":   "…",
     "plan":          "…",
-    "completed":     ["…", …],
-    "remaining":     ["…", …],
     "notes":         "…",
     "stage_outputs": {"clarification": "…", "planning": "…"},
     "messages":      [{"role": "…", "content": "…"}, …],  # the task's own transcript
@@ -73,8 +71,6 @@ class TaskStore:
             "result_path": "",
             "description": "",
             "plan": "",
-            "completed": [],
-            "remaining": [],
             "notes": "",
             "stage_outputs": {},
             "messages": [],
@@ -190,8 +186,6 @@ class TaskStore:
         data.setdefault("result_path", "")
         data.setdefault("description", "")
         data.setdefault("plan", "")
-        data.setdefault("completed", [])
-        data.setdefault("remaining", [])
         data.setdefault("notes", "")
         data.setdefault("stage_outputs", {})
         data.setdefault("messages", [])

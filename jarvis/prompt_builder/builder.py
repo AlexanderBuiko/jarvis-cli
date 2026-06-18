@@ -121,12 +121,6 @@ def build_working_memory_block(task: dict[str, Any]) -> list[dict]:
     if task.get("plan"):
         lines.append("Plan:")
         lines.append(task["plan"])
-    if task.get("completed"):
-        lines.append("Completed:")
-        lines += [f"  - {item}" for item in task["completed"]]
-    if task.get("remaining"):
-        lines.append("Remaining:")
-        lines += [f"  - {item}" for item in task["remaining"]]
     if task.get("notes"):
         lines.append(f"Notes: {task['notes']}")
 

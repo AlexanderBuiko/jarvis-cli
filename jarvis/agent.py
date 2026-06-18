@@ -546,26 +546,6 @@ class JarvisAgent:
             return target  # rework in place — stay in the stage
         return self._tasks.advance_stage(self._active_task, target)
 
-    def add_completed(self, item: str) -> bool:
-        """Record a completed item on the active task. Returns False if no task."""
-        if self._active_task is None:
-            return False
-        self._active_task.setdefault("completed", []).append(item)
-        # Drop a matching remaining item if present.
-        self._active_task["remaining"] = [
-            r for r in self._active_task.get("remaining", []) if r != item
-        ]
-        self._tasks.save(self._active_task)
-        return True
-
-    def add_remaining(self, item: str) -> bool:
-        """Record a pending item on the active task. Returns False if no task."""
-        if self._active_task is None:
-            return False
-        self._active_task.setdefault("remaining", []).append(item)
-        self._tasks.save(self._active_task)
-        return True
-
     # ── Long-term memory ───────────────────────────────────────────────────────
 
     @property

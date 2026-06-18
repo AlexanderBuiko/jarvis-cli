@@ -37,8 +37,6 @@ from .commands import (
     handle_task_start,
     handle_task_exit,
     handle_task_delete,
-    handle_task_done,
-    handle_task_todo,
     handle_memory_list,
     handle_memory_init,
     handle_memory_edit,
@@ -433,13 +431,9 @@ def _dispatch(
             return handle_task_exit(agent)
         if sub == "delete":
             return handle_task_delete(args[1:], agent)
-        if sub == "done":
-            return handle_task_done(args[1:], agent)
-        if sub == "todo":
-            return handle_task_todo(args[1:], agent)
         return (
-            "Usage: task | task new [name] | task list | task start <name-or-id> | task run | "
-            "task exit | task delete <name-or-id> | task done <item> | task todo <item>"
+            "Usage: task | task new [name] | task list | task start <name-or-id> | "
+            "task run | task exit | task delete <name-or-id>"
         )
 
     if cmd == "memory":

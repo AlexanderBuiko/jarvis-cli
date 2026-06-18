@@ -62,8 +62,6 @@ Commands
   task run                      Continue the entered task with no new input
   task exit                     Leave the task, back to chat (state preserved)
   task delete <name-or-id>      Permanently delete a task
-  task done <item>              Record a completed item on the entered task
-  task todo <item>              Record a remaining item on the entered task
 
   Tasks and chat are two separate surfaces. Threads ('thread …') are pure
   conversation. A task is a standalone workspace with its own context: 'task start'
@@ -472,22 +470,6 @@ def handle_task_delete(args: list[str], agent: JarvisAgent) -> str:
     if name is None:
         return f"Task not found: '{' '.join(args)}'."
     return f"Task '{name}' deleted."
-
-
-def handle_task_done(args: list[str], agent: JarvisAgent) -> str:
-    if not args:
-        return "Usage: task done <item>"
-    if not agent.add_completed(" ".join(args)):
-        return "No active task. Use 'task new <name>' first."
-    return "Recorded completed item."
-
-
-def handle_task_todo(args: list[str], agent: JarvisAgent) -> str:
-    if not args:
-        return "Usage: task todo <item>"
-    if not agent.add_remaining(" ".join(args)):
-        return "No active task. Use 'task new <name>' first."
-    return "Recorded remaining item."
 
 
 # ── Long-term memory ────────────────────────────────────────────────────────
