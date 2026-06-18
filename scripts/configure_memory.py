@@ -14,9 +14,8 @@ Usage:
     python scripts/configure_memory.py            # write only missing files
     python scripts/configure_memory.py --force    # overwrite existing files
 
-Afterwards, edit them any time from the REPL:
-    ! memory edit profile
-    ! memory edit invariants
+Afterwards, refresh the profile from the REPL with  ! profile onboard,
+and edit invariants.md directly (its path is printed by  ! invariants).
 """
 
 import argparse
@@ -26,41 +25,53 @@ from pathlib import Path
 # Allow running directly from the repo root without installing the package.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from jarvis.session.long_term_memory import LongTermMemory  # noqa: E402
+from jarvis.session.profile_store import ProfileStore  # noqa: E402
+from jarvis.session.invariant_store import InvariantStore  # noqa: E402
 
 
 PROFILE_MD = """\
 # Profile
 
 ## Style
-- Be concise: lead with the answer, then a short justification.
-- Use concrete examples or analogies when they aid understanding; skip filler.
-- When teaching or explaining, check my understanding rather than info-dumping.
+- Lead with the answer or recommendation, then a short why. No long preambles.
+- Prefer short paragraphs and bullet points over walls of text.
+- Use concrete examples or analogies when they make an idea click; skip filler.
+- When teaching, check my understanding with a question instead of info-dumping.
+- Pitch at an intermediate level: don't re-explain the basics unless I ask.
 
 ## Constraints
-- Stay within the scope of what I asked; flag clearly when something is out of scope.
-- Adapt the depth to my stated level; don't over-simplify or over-complicate.
-- (Add your own: preferred language, topics of interest, level of detail.)
+- Default to free, open tools; flag anything that needs a paid subscription.
+- Answer in English unless I am practising another language.
+- For anything non-trivial, propose a short plan before diving in.
 
 ## Context
-- I use Jarvis as a general-purpose personal assistant — for studying, planning,
-  preparing for things, and thinking tasks through. Not for writing code.
-- Tasks run as a managed process: clarification -> planning -> execution ->
-  validation -> done, and I control stage transitions with `task next` / `task back`.
+- I am a working professional using Jarvis as a study and planning companion — to
+  learn languages and technical topics, prepare talks and trips, and think problems
+  through. I want to understand and do the work myself, not have it done for me.
+- I work in focused sessions and often resume a task later, so keep track of where
+  we are. Tasks run as a managed process: clarification -> planning -> execution ->
+  validation -> done, and I control transitions with `task next` / `task back`.
 """
 
 INVARIANTS_MD = """\
 # Invariants
 
 Hard rules the agent must never violate, even if a request asks otherwise.
-These are injected into every prompt and also checked in code: a reply that
-breaks one is automatically reworked before it reaches me.
+These are injected into every prompt and also checked in code: when a request
+conflicts with one, the agent refuses, names the invariant, and explains why.
 
-- Never invent facts, sources, numbers, or quotes — say clearly when something
-  is unknown or uncertain.
-- Ask a clarifying question before giving a definitive answer to an ambiguous request.
-- Stay within the scope I asked for; don't pad answers with unrequested content.
-- (Add your own domain rules, e.g. preferred language, study goals, topics to avoid.)
+- Companion, not a ghostwriter. Help me understand and produce my OWN work. Do not
+  hand over finished deliverables for me to pass off as mine — no complete essays,
+  assignments, application answers, or ship-ready code. Outline, explain, and review
+  what I write instead.
+- No fabrication. Never invent facts, statistics, citations, quotes, or sources.
+  Say clearly when something is unknown or uncertain.
+- Plan before execution. For any non-trivial task, agree on the approach before
+  producing the final result; do not jump straight to a finished solution.
+- Not a licensed professional. Do not give individualised medical, legal, or
+  financial advice; give general information and point me to a qualified professional.
+- Stay in scope and free. Don't pad answers with unrequested content, and don't
+  recommend a paid tool or service without naming the cost and a free alternative.
 """
 
 
@@ -71,20 +82,26 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    memory = LongTermMemory()
-    files = {"profile": PROFILE_MD, "invariants": INVARIANTS_MD}
+    profile = ProfileStore()
+    invariants = InvariantStore()
 
-    for name, content in files.items():
-        path = memory.path_for(name)
-        if memory.exists(name) and not args.force:
-            print(f"skip   {name}.md (already exists — use --force to overwrite)")
+    targets = [
+        ("profile.md", profile.path_for(), profile.exists(),
+         lambda: profile.write(PROFILE_MD)),
+        ("invariants.md", invariants.path_for(), invariants.exists(),
+         lambda: invariants.write(INVARIANTS_MD)),
+    ]
+
+    for label, path, exists, write in targets:
+        if exists and not args.force:
+            print(f"skip   {label} (already exists — use --force to overwrite)")
             continue
-        memory.write(name, content)
+        write()
         print(f"wrote  {path}")
 
     print(
         "\nDone. These files are now injected into every Jarvis prompt.\n"
-        "Edit them from the REPL with:  ! memory edit profile  /  ! memory edit invariants"
+        "Refresh the profile with  ! profile onboard ; edit invariants.md directly."
     )
     return 0
 
