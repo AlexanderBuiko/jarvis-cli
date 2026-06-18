@@ -252,7 +252,11 @@ class InputController:
             return FormattedText(items)
 
         app = Application(
-            layout=Layout(HSplit([Window(content=FormattedTextControl(render), dont_extend_height=True)])),
+            layout=Layout(HSplit([Window(
+                content=FormattedTextControl(render),
+                dont_extend_height=True,
+                always_hide_cursor=True,  # don't park the cursor over the arrow glyph
+            )])),
             key_bindings=kb,
             style=Style.from_dict({
                 "select.title": "#8b9dc3 bold",

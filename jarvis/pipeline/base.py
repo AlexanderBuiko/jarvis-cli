@@ -13,6 +13,7 @@ pattern as the invariant checker's "OK". Markers are added to the prompt only on
 orchestrator-driven runs and are stripped from the displayed reply.
 """
 
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -29,13 +30,19 @@ GATE_APPROVAL = "approval"   # present a Confirm / Reject choice at a critical d
 
 
 def parse_markers(text: str) -> tuple[str, set[str]]:
-    """Strip any control markers from text. Returns (clean_text, markers_found)."""
+    """Strip any control markers from text. Returns (clean_text, markers_found).
+
+    Matching is case-insensitive and tolerates surrounding whitespace, since models
+    routinely emit variants like [[STEP_done]] or [[ ready ]].
+    """
     found: set[str] = set()
     clean = text
     for marker in ALL_MARKERS:
-        if marker in clean:
+        inner = re.escape(marker.strip("[]"))
+        pattern = re.compile(r"\[\[\s*" + inner + r"\s*\]\]", re.IGNORECASE)
+        if pattern.search(clean):
             found.add(marker)
-            clean = clean.replace(marker, "")
+            clean = pattern.sub("", clean)
     clean = "\n".join(line.rstrip() for line in clean.splitlines()).strip()
     return clean, found
 

@@ -33,6 +33,17 @@ class ParseMarkersTest(unittest.TestCase):
         self.assertEqual(clean, "just text")
         self.assertEqual(found, set())
 
+    def test_marker_matching_is_case_insensitive(self):
+        # Models emit variants like [[STEP_done]] — they must still be recognised.
+        clean, found = parse_markers("Step 2 result.\n[[STEP_done]]")
+        self.assertEqual(found, {MARKER_STEP_DONE})
+        self.assertEqual(clean, "Step 2 result.")
+
+    def test_marker_tolerates_inner_whitespace(self):
+        clean, found = parse_markers("ok [[ ready ]]")
+        self.assertEqual(found, {MARKER_READY})
+        self.assertEqual(clean, "ok")
+
 
 class ClarifierTest(unittest.TestCase):
     def test_ready_marker_advances_to_planning(self):

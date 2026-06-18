@@ -55,11 +55,13 @@ class ClarifierAgent(StageAgent):
 
     def system_fragment(self, task: dict) -> str:
         return (
-            "The active task is in the CLARIFICATION stage. Make sure the goal, success criteria, "
-            "scope, and constraints are clear. Ask clarifying questions ONLY about details that are "
-            "genuinely missing or ambiguous — do not ask about things the user already specified or "
-            "that have a sensible default. When you believe you understand the task, briefly restate "
-            "your understanding."
+            "The active task is in the CLARIFICATION stage — this is the ONLY stage where you may "
+            "ask the user questions. Gather every requirement needed to produce the final result: "
+            "goal, success criteria, scope, and any important constraints. If anything needed to "
+            "produce a complete result is missing or ambiguous, ask about it now (you may ask "
+            "several questions in one message). Do NOT ask about things the user already specified "
+            "or that have an obvious sensible default. Only once you have everything you need, "
+            "briefly restate your understanding — the later stages will NOT be able to ask the user."
         )
 
     def entry_message(self, task: dict) -> str:
@@ -94,12 +96,18 @@ class PlannerAgent(StageAgent):
     def system_fragment(self, task: dict) -> str:
         return (
             "The active task is in the PLANNING stage. Produce a concrete, ordered, numbered plan "
-            "that would complete the task. The user will review it and either approve it or ask for "
-            "changes."
+            "of the STEPS REQUIRED TO PRODUCE THE DELIVERABLE. Each step must be an action that "
+            "creates part of the final result (e.g. for a recipe: 'list the ingredients', 'write "
+            "the cooking instructions') — NOT a question to the user. Requirements are already "
+            "settled in clarification; do NOT ask the user anything, and choose sensible defaults "
+            "for any minor unspecified detail. The user will approve the plan or ask for changes."
         )
 
     def entry_message(self, task: dict) -> str:
-        return "Produce the concrete, ordered, numbered plan for this task now."
+        return (
+            "Produce the concrete, ordered, numbered plan of steps that will PRODUCE the deliverable. "
+            "Do not include any steps that ask the user questions."
+        )
 
     def marker_protocol(self) -> str:
         # No markers: producing a plan always leads to the plan-approval gate.
@@ -134,8 +142,11 @@ class ExecutorAgent(StageAgent):
     def system_fragment(self, task: dict) -> str:
         return (
             "The active task is in the EXECUTION stage. Carry out the approved plan one step at a "
-            "time, reporting the result of each step. If you need information from the user to "
-            "proceed, ask for it."
+            "time. Each step must actually PRODUCE its part of the deliverable (write the content, "
+            "do the work) and report that produced output — not merely describe or ask about it. "
+            "Requirements were settled in clarification, so proceed with sensible defaults; only "
+            "ask the user (and only then) if you are genuinely blocked and cannot make a reasonable "
+            "assumption."
         )
 
     def entry_message(self, task: dict) -> str:

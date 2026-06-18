@@ -9,6 +9,7 @@ All conversation and LLM logic lives in the agent; this module is pure UI.
 """
 
 import itertools
+import shutil
 import sys
 import threading
 import time
@@ -143,18 +144,19 @@ def _color_step_line(line: str) -> str:
     return f"{colour}{line}{_ANSI_RESET}" if colour else line
 
 
-def _drive_task(agent: JarvisAgent, controller: InputController) -> str:
+def _drive_task(agent: JarvisAgent, controller: InputController, initial_pending: str = "") -> str:
     """Drive the active task's pipeline interactively to the next pause or done.
 
     Execution runs under a live step table (updated in place as each step
     completes) with a spinner+timer beneath it. Other stages run with the plain
     spinner. Pauses at gates: a free-text question, or a Confirm/Reject approval
-    (only at plan approval and the final done decision).
+    (only at plan approval and the final done decision). initial_pending seeds the
+    first turn (e.g. the task request captured at 'task new').
     """
     if agent.active_task is None:
         return "No active task. Use 'task new <name>' first."
 
-    pending = ""
+    pending = initial_pending
     for _ in range(_MAX_DRIVE_TURNS):
         stage = agent.active_task["stage"] if agent.active_task else None
         if stage is None:
@@ -196,7 +198,8 @@ def _drive_task(agent: JarvisAgent, controller: InputController) -> str:
 
         verdict = result.verdict
         if verdict and verdict.gate == GATE_APPROVAL:
-            choice = controller.select(_approval_title(result.stage), ["Confirm", "Reject"])
+            title, options = _approval_prompt(result.stage)
+            choice = controller.select(title, options)
             if choice == 0:
                 agent.advance_to(verdict.confirm_target)
                 continue
@@ -222,15 +225,25 @@ def _drive_task(agent: JarvisAgent, controller: InputController) -> str:
 
 def _exec_panel(agent: JarvisAgent, frame: str, elapsed: float, interrupted: bool,
                 final: bool = False) -> list[str]:
-    """Build the live execution panel: the step table plus a spinner+timer line."""
+    """Build the live execution panel: the step table plus a spinner+timer line.
+
+    Every line is truncated to the terminal width so each occupies exactly one
+    visual row — that keeps the in-place redraw's cursor-up count exact (wrapped
+    lines would otherwise make the panel accumulate).
+    """
+    width = max(20, shutil.get_terminal_size((80, 24)).columns)
     table = render_plan_progress(agent.active_task) or "Executing…"
-    lines = [_color_step_line(ln) for ln in table.split("\n")]
+    lines = []
+    for ln in table.split("\n"):
+        if len(ln) > width:
+            ln = ln[: width - 1] + "…"
+        lines.append(_color_step_line(ln))
     if not final:
         if interrupted:
             spin = f"{frame} Stopping {elapsed:4.1f}s  ·  finishing current step…"
         else:
             spin = f"{frame} Working… {elapsed:4.1f}s  ·  Ctrl+C to stop"
-        lines += ["", spin]
+        lines += ["", spin[:width]]
     return lines
 
 
@@ -291,12 +304,19 @@ def _drive_execution(agent: JarvisAgent, controller: InputController, pending: s
     return "left", pending
 
 
-def _approval_title(stage: str) -> str:
+def _approval_prompt(stage: str) -> tuple[str, list[str]]:
+    """Title and (Confirm, Reject) labels for an approval gate, made explicit."""
     if stage == "planning":
-        return "Approve this plan and start execution?"
+        return (
+            "Approve this plan?",
+            ["Confirm — start execution", "Reject — revise the plan"],
+        )
     if stage == "validation":
-        return "Mark this task as done?"
-    return "Proceed?"
+        return (
+            "Validation complete — finish the task?",
+            ["Confirm — mark done", "Reject — send back to execution"],
+        )
+    return ("Proceed?", ["Confirm", "Reject"])
 
 
 # ── Dispatcher ────────────────────────────────────────────────────────────────
@@ -368,8 +388,13 @@ def _dispatch(
         if sub == "new":
             created = handle_task_new(args[1:], agent)
             print(created)
-            # Kick off the pipeline immediately; 'task run' is then for continuing.
-            return _drive_task(agent, controller)
+            # Capture the actual request up front so clarification starts with it
+            # instead of opening with "I have no information about this task".
+            request = controller.read_text("What do you want to accomplish?")
+            if not request:
+                return "Task created. Run 'task run' when you're ready to describe it."
+            pending = f"The user's request: {request}"
+            return _drive_task(agent, controller, pending)
         if sub == "list":
             return handle_task_list(agent)
         if sub == "show":
