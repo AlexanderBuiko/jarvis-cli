@@ -73,6 +73,7 @@ class TaskStoreTest(unittest.TestCase):
         task = self.store.new_task("demo")
         path = self.store.save_result(task, "# Deliverable\nthe final result")
         self.assertTrue(path.exists())
+        self.assertEqual(path.parent.name, "results")  # stored under tasks/results/
         self.assertEqual(path.read_text(encoding="utf-8"), "# Deliverable\nthe final result")
         self.assertEqual(task["result_path"], str(path))
         # Persisted to the task file too.

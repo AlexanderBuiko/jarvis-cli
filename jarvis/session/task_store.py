@@ -125,9 +125,10 @@ class TaskStore:
         return False
 
     def save_result(self, task: dict, text: str) -> Path:
-        """Write the task's final deliverable to a file artifact and record its path."""
-        self._dir.mkdir(parents=True, exist_ok=True)
-        path = self._dir / f"{task['id']}.result.md"
+        """Write the task's final deliverable to the results/ subdirectory and record its path."""
+        results_dir = self._dir / "results"
+        results_dir.mkdir(parents=True, exist_ok=True)
+        path = results_dir / f"{task['id']}.md"
         path.write_text(text, encoding="utf-8")
         task["result_path"] = str(path)
         self.save(task)
