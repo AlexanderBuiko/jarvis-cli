@@ -8,6 +8,7 @@ from jarvis.pipeline.base import (
     MARKER_PASS,
     MARKER_READY,
     MARKER_REPLAN,
+    MARKER_STEP_DONE,
     parse_markers,
 )
 from jarvis.pipeline.stages import (
@@ -16,6 +17,7 @@ from jarvis.pipeline.stages import (
     PlannerAgent,
     ValidatorAgent,
     STAGE_AGENTS,
+    parse_plan_steps,
     stage_system_fragment,
 )
 from jarvis.prompt_builder.builder import build_system_prompt
@@ -57,36 +59,69 @@ class PlannerTest(unittest.TestCase):
         ok, _ = PlannerAgent().input_ready({"stage": "planning", "description": "x"})
         self.assertTrue(ok)
 
-    def test_ready_records_plan(self):
+    def test_ready_records_and_parses_plan(self):
         task = {"stage": "planning", "description": "x"}
         v = PlannerAgent().process(task, "1. do a\n2. do b\n" + MARKER_READY)
         self.assertTrue(v.ready)
         self.assertEqual(task["plan"], "1. do a\n2. do b")
+        self.assertEqual(task["plan_steps"], ["do a", "do b"])
+        self.assertEqual(task["step_index"], 0)
         self.assertEqual(task["expected_action"], "ready_to_execute")
 
 
+class ParsePlanStepsTest(unittest.TestCase):
+    def test_numbered(self):
+        self.assertEqual(parse_plan_steps("1. a\n2) b\n3. c"), ["a", "b", "c"])
+
+    def test_bulleted(self):
+        self.assertEqual(parse_plan_steps("- a\n* b\n• c"), ["a", "b", "c"])
+
+    def test_fallback_to_lines(self):
+        self.assertEqual(parse_plan_steps("do a\ndo b"), ["do a", "do b"])
+
+
 class ExecutorTest(unittest.TestCase):
+    def _task(self):
+        return {"stage": "execution", "plan": "p", "plan_steps": ["a", "b", "c"], "step_index": 0}
+
     def test_input_contract_requires_plan(self):
         ok, _ = ExecutorAgent().input_ready({"stage": "execution"})
         self.assertFalse(ok)
         ok, _ = ExecutorAgent().input_ready({"stage": "execution", "plan": "p"})
         self.assertTrue(ok)
 
-    def test_ready_sets_current_step_and_advances(self):
-        task = {"stage": "execution", "plan": "p"}
-        v = ExecutorAgent().process(task, "Working on step one now.\nDetails...\n" + MARKER_READY)
+    def test_step_done_advances_one_step_and_continues(self):
+        task = self._task()
+        v = ExecutorAgent().process(task, "Did step a.\n" + MARKER_STEP_DONE)
+        self.assertTrue(v.continue_stage)
+        self.assertFalse(v.ready)
+        self.assertFalse(v.needs_user)
+        self.assertEqual(task["step_index"], 1)
+        self.assertEqual(task["current_step"], "b")
+
+    def test_ready_marks_all_steps_done(self):
+        task = self._task()
+        task["step_index"] = 2
+        v = ExecutorAgent().process(task, "Final step done.\n" + MARKER_READY)
         self.assertTrue(v.ready)
-        self.assertEqual(task["current_step"], "Working on step one now.")
+        self.assertEqual(task["step_index"], 3)  # == len(steps): all complete
+        self.assertEqual(task["current_step"], "")
         self.assertEqual(task["expected_action"], "ready_to_validate")
 
+    def test_entry_message_names_current_step(self):
+        task = self._task()
+        task["step_index"] = 1
+        msg = ExecutorAgent().entry_message(task)
+        self.assertIn("step 2 of 3", msg)
+        self.assertIn("b", msg)
+
     def test_needs_user_gate(self):
-        task = {"stage": "execution", "plan": "p"}
-        v = ExecutorAgent().process(task, "What's your answer?\n" + MARKER_NEEDS_USER)
+        v = ExecutorAgent().process(self._task(), "What's your answer?\n" + MARKER_NEEDS_USER)
         self.assertTrue(v.needs_user)
         self.assertFalse(v.ready)
 
     def test_replan_is_a_backward_gate(self):
-        task = {"stage": "execution", "plan": "p"}
+        task = self._task()
         v = ExecutorAgent().process(task, "The plan is wrong.\n" + MARKER_REPLAN)
         self.assertTrue(v.needs_user)
         self.assertEqual(v.next_target, "planning")

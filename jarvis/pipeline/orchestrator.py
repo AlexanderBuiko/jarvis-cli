@@ -29,8 +29,9 @@ RunTurn = Callable[[str, str], str]
 
 
 class Orchestrator:
-    # Safety cap so a misbehaving model can never loop the FSM forever.
-    MAX_STEPS = 12
+    # Safety cap so a misbehaving model can never loop the FSM forever. Generous
+    # enough for step-wise execution of a multi-step plan plus the other stages.
+    MAX_STEPS = 40
 
     def __init__(self, agents: dict[str, StageAgent], tasks) -> None:
         self._agents = agents
@@ -61,7 +62,15 @@ class Orchestrator:
             result = StageResult(stage=stage, text=verdict.clean_text, verdict=verdict)
             results.append(result)
 
-            if verdict.needs_user or not verdict.ready:
+            if verdict.needs_user:
+                break
+            # Made progress within the stage (e.g. one plan step done) — re-run the
+            # same stage rather than advancing, so step-wise work continues.
+            if verdict.continue_stage:
+                if autonomy != "auto":
+                    break
+                continue
+            if not verdict.ready:
                 break
             if autonomy != "auto":
                 break

@@ -19,11 +19,12 @@ from dataclasses import dataclass
 # Control markers a stage agent may emit.
 MARKER_READY = "[[READY]]"          # output contract met; advance on the default forward edge
 MARKER_NEEDS_USER = "[[NEEDS_USER]]"  # stage needs the user before it can complete (gate)
+MARKER_STEP_DONE = "[[STEP_DONE]]"  # execution: this plan step is done, more remain (stay in stage)
 MARKER_PASS = "[[PASS]]"            # validation: criteria met -> done
 MARKER_FAIL = "[[FAIL]]"            # validation: criteria not met -> back to execution
 MARKER_REPLAN = "[[REPLAN]]"        # execution: the plan must change -> back to planning
 
-ALL_MARKERS = (MARKER_READY, MARKER_NEEDS_USER, MARKER_PASS, MARKER_FAIL, MARKER_REPLAN)
+ALL_MARKERS = (MARKER_READY, MARKER_NEEDS_USER, MARKER_STEP_DONE, MARKER_PASS, MARKER_FAIL, MARKER_REPLAN)
 
 
 def parse_markers(text: str) -> tuple[str, set[str]]:
@@ -44,6 +45,7 @@ class StageVerdict:
     clean_text: str = ""
     ready: bool = False           # output contract satisfied -> eligible to advance
     needs_user: bool = False      # stop and wait for the user (gate)
+    continue_stage: bool = False  # made progress, more work remains -> re-run this same stage
     next_target: str | None = None  # explicit branch target; None = default forward edge
     expected_action: str = ""     # machine-readable next action (see EXPECTED_ACTIONS)
 
@@ -57,6 +59,7 @@ EXPECTED_READY_TO_FINISH = "ready_to_finish"
 EXPECTED_NEEDS_REWORK = "needs_rework"
 EXPECTED_NEEDS_REPLAN = "needs_replan"
 EXPECTED_IN_PROGRESS = "in_progress"
+EXPECTED_STEP_DONE = "step_done"
 EXPECTED_DONE = "done"
 
 

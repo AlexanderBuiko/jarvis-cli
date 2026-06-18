@@ -52,6 +52,7 @@ from .commands import (
     handle_memory_append,
     handle_memory_delete,
     handle_personalize,
+    render_plan_progress,
 )
 from .input import InputController
 from ..agent import JarvisAgent
@@ -72,7 +73,14 @@ def run_repl(agent: JarvisAgent, config_manager: ConfigManager) -> None:
             return f"{tokens:,}/{ctx:,} ({pct}%) tokens"
         return f"{tokens:,} tokens"
 
-    controller = InputController(status_fn=_status_fn)
+    def _progress_fn() -> str:
+        """Live plan-progress panel shown above the input during execution/validation."""
+        task = agent.active_task
+        if not task or task.get("stage") not in ("execution", "validation"):
+            return ""
+        return render_plan_progress(task) or ""
+
+    controller = InputController(status_fn=_status_fn, progress_fn=_progress_fn)
 
     while True:
         try:
@@ -168,7 +176,15 @@ def _dispatch(
         if sub == "start":
             return handle_task_start(args[1:], agent)
         if sub == "run":
-            return _run_with_spinner(lambda: handle_task_run(agent))
+            def _run_status() -> str:
+                t = agent.active_task
+                steps = t.get("plan_steps") if t else None
+                if t and t.get("stage") == "execution" and steps:
+                    n = len(steps)
+                    cur = min(t.get("step_index", 0) + 1, n)
+                    return f"executing step {cur}/{n}"
+                return t.get("stage", "") if t else ""
+            return _run_with_spinner(lambda: handle_task_run(agent), status_fn=_run_status)
         if sub == "next":
             return handle_task_next(agent)
         if sub == "back":
@@ -271,11 +287,12 @@ _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _SPINNER_DELAY_S = 0.25
 
 
-def _run_with_spinner(fn: Callable[[], str]) -> str:
+def _run_with_spinner(fn: Callable[[], str], status_fn: Callable[[], str] | None = None) -> str:
     """Run fn() on a worker thread while animating an elapsed-time spinner.
 
-    Signals that work is in progress and that input is not expected. The result
-    (or exception) of fn is returned (or re-raised) once it completes.
+    Signals that work is in progress and that input is not expected. status_fn,
+    when given, supplies a live suffix (e.g. the current plan step) re-read on
+    every frame. The result (or exception) of fn is returned (or re-raised).
     """
     box: dict = {}
 
@@ -295,7 +312,13 @@ def _run_with_spinner(fn: Callable[[], str]) -> str:
         elapsed = time.perf_counter() - start
         if elapsed >= _SPINNER_DELAY_S:
             drawing = True
-            sys.stdout.write(f"\r{next(frames)} Working… {elapsed:4.1f}s  (please wait)")
+            suffix = ""
+            if status_fn is not None:
+                live = status_fn()
+                if live:
+                    suffix = f"  ·  {live}"
+            # \033[K clears to end-of-line so a shrinking suffix leaves no residue.
+            sys.stdout.write(f"\r{next(frames)} Working… {elapsed:4.1f}s{suffix}  (please wait)\033[K")
             sys.stdout.flush()
         worker.join(0.1)
     if drawing:

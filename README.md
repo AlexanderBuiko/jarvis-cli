@@ -183,6 +183,11 @@ stages on its own and stops only at a gate — clarification questions, a
 validation failure, or a replan. Backward edges are always manual. Every advance
 goes through the code-enforced `ALLOWED_TRANSITIONS`; the model never moves itself.
 
+**Live progress.** Planning parses the plan into discrete steps; execution then
+works **one step per turn**. During execution a live panel sits above the input
+line showing the full plan with each step marked ✓ completed · ▶ in-progress ·
+○ pending, and the spinner reports `executing step k/n` as it advances.
+
 ## Architecture
 
 ```

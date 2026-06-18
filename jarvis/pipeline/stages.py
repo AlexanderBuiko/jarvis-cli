@@ -11,12 +11,15 @@ execution REPLAN — are treated as user gates, so the pipeline never silently
 loops; the user is asked to confirm a rework or a replan.
 """
 
+import re
+
 from .base import (
     MARKER_FAIL,
     MARKER_NEEDS_USER,
     MARKER_PASS,
     MARKER_READY,
     MARKER_REPLAN,
+    MARKER_STEP_DONE,
     EXPECTED_AWAIT_USER,
     EXPECTED_DONE,
     EXPECTED_IN_PROGRESS,
@@ -26,9 +29,29 @@ from .base import (
     EXPECTED_READY_TO_FINISH,
     EXPECTED_READY_TO_PLAN,
     EXPECTED_READY_TO_VALIDATE,
+    EXPECTED_STEP_DONE,
     StageAgent,
     StageVerdict,
 )
+
+
+def parse_plan_steps(plan_text: str) -> list[str]:
+    """Parse a free-text plan into an ordered list of step strings.
+
+    Recognises numbered ("1." / "1)") and bulleted ("-", "*", "•") lines. If no
+    such markers are present, falls back to treating each non-empty line as a
+    step. Leading enumerator/bullet tokens are stripped from each step.
+    """
+    enumerator = re.compile(r"^\s*(?:\d+[.)]|[-*•])\s+(.*\S)\s*$")
+    steps: list[str] = []
+    for line in plan_text.splitlines():
+        m = enumerator.match(line)
+        if m:
+            steps.append(m.group(1).strip())
+    if steps:
+        return steps
+    # Fallback: no list markers — use non-empty lines as steps.
+    return [ln.strip() for ln in plan_text.splitlines() if ln.strip()]
 
 
 class ClarifierAgent(StageAgent):
@@ -96,6 +119,10 @@ class PlannerAgent(StageAgent):
     def record(self, task: dict, clean_text: str, verdict: StageVerdict) -> None:
         super().record(task, clean_text, verdict)
         task["plan"] = clean_text
+        # Parse the plan into trackable steps and reset progress to the first one.
+        task["plan_steps"] = parse_plan_steps(clean_text)
+        task["step_index"] = 0
+        task["current_step"] = task["plan_steps"][0] if task["plan_steps"] else ""
 
 
 class ExecutorAgent(StageAgent):
@@ -109,11 +136,20 @@ class ExecutorAgent(StageAgent):
         )
 
     def entry_message(self, task: dict) -> str:
+        steps = task.get("plan_steps") or []
+        idx = task.get("step_index", 0)
+        if steps and idx < len(steps):
+            return (
+                f"Work on step {idx + 1} of {len(steps)} now: {steps[idx]}\n"
+                "Complete only this one step and report the result."
+            )
         return "Begin executing the approved plan. Present the next step of work."
 
     def marker_protocol(self) -> str:
         return (
-            f"End your reply with {MARKER_READY} when all planned work is finished; with "
+            "Work on the single current step only. End your reply with "
+            f"{MARKER_STEP_DONE} if that step is done and further steps remain; with "
+            f"{MARKER_READY} if that was the last step and all planned work is finished; with "
             f"{MARKER_NEEDS_USER} if you need the user's input to continue; or with {MARKER_REPLAN} "
             "if the plan itself must change."
         )
@@ -131,14 +167,22 @@ class ExecutorAgent(StageAgent):
             )
         if MARKER_READY in markers:
             return StageVerdict(ready=True, expected_action=EXPECTED_READY_TO_VALIDATE)
+        if MARKER_STEP_DONE in markers:
+            # Progress: this step is complete, but more remain — re-run execution.
+            return StageVerdict(continue_stage=True, expected_action=EXPECTED_STEP_DONE)
         return StageVerdict(needs_user=True, expected_action=EXPECTED_AWAIT_USER)
 
     def record(self, task: dict, clean_text: str, verdict: StageVerdict) -> None:
         super().record(task, clean_text, verdict)
-        # The current step is the first non-empty line of the latest execution turn.
-        first_line = next((ln.strip() for ln in clean_text.splitlines() if ln.strip()), "")
-        if first_line:
-            task["current_step"] = first_line[:120]
+        steps = task.get("plan_steps") or []
+        if verdict.expected_action == EXPECTED_STEP_DONE:
+            # Advance the in-progress pointer to the next step.
+            task["step_index"] = min(task.get("step_index", 0) + 1, len(steps))
+        elif verdict.ready:
+            # All work finished — every step is complete.
+            task["step_index"] = len(steps)
+        idx = task.get("step_index", 0)
+        task["current_step"] = steps[idx] if idx < len(steps) else ""
 
 
 class ValidatorAgent(StageAgent):

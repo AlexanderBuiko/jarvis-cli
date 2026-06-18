@@ -143,8 +143,13 @@ class InputController:
       text        raw buffer content, stripped
     """
 
-    def __init__(self, status_fn: Callable[[], str] | None = None) -> None:
+    def __init__(
+        self,
+        status_fn: Callable[[], str] | None = None,
+        progress_fn: Callable[[], str] | None = None,
+    ) -> None:
         self._status_fn = status_fn
+        self._progress_fn = progress_fn
 
         # ── Mode ──────────────────────────────────────────────────────────────
         self._mode: str = "prompt"  # "prompt" | "command"
@@ -250,6 +255,15 @@ class InputController:
             filter=has_suggestions,
         )
 
+        has_progress = Condition(lambda: bool(self._progress_fn and self._progress_fn()))
+        progress_window = ConditionalContainer(
+            Window(
+                content=FormattedTextControl(self._render_progress),
+                dont_extend_height=True,
+            ),
+            filter=has_progress,
+        )
+
         containers = []
         if self._status_fn is not None:
             containers.append(
@@ -260,6 +274,7 @@ class InputController:
                 )
             )
         containers += [
+            progress_window,
             input_window,
             suggestions_window,
         ]
@@ -275,6 +290,10 @@ class InputController:
             "suggestion": SUGGESTION_COLOR,
             "hint": "#6b7280 italic",
             "status": "#8b9dc3",
+            "progress.header": "#8b9dc3 bold",
+            "progress.done": "#98c379",        # green
+            "progress.current": "#e5c07b bold",  # amber
+            "progress.pending": "#6b7280",      # grey
         })
 
         return Application(
@@ -296,6 +315,22 @@ class InputController:
             width = 80
         padded = text.ljust(width)
         return FormattedText([("class:status", padded)])
+
+    def _render_progress(self) -> FormattedText:
+        """Render the plan-progress panel, colouring each line by its status glyph."""
+        text = self._progress_fn() if self._progress_fn else ""
+        if not text:
+            return FormattedText([])
+        glyph_class = {
+            "✓": "class:progress.done",
+            "▶": "class:progress.current",
+            "○": "class:progress.pending",
+        }
+        items = []
+        for line in text.split("\n"):
+            cls = glyph_class.get(line[:1], "class:progress.header")
+            items.append((cls, line + "\n"))
+        return FormattedText(items)
 
     def _render_hint(self) -> FormattedText:
         text = (

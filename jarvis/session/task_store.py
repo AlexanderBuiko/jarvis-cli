@@ -9,6 +9,8 @@ It lives independently of any thread as a JSON file under ~/.jarvis/tasks/<id>.j
     "stage":         "execution",
     "current_step":  "…",          # the step being worked within the current stage
     "expected_action": "…",        # machine-readable next action (e.g. await_user, run:task next)
+    "plan_steps":    ["…", …],     # the plan parsed into ordered, trackable steps
+    "step_index":    2,            # index of the in-progress step (steps before it are done)
     "description":   "…",
     "plan":          "…",
     "completed":     ["…", …],
@@ -65,6 +67,8 @@ class TaskStore:
             "stage": "clarification",
             "current_step": "",
             "expected_action": "",
+            "plan_steps": [],
+            "step_index": 0,
             "description": "",
             "plan": "",
             "completed": [],
@@ -139,6 +143,10 @@ class TaskStore:
         task["stage"] = target
         # current_step belongs to a stage; clear it so the new stage starts fresh.
         task["current_step"] = ""
+        # Entering execution (forward, or back from validation for rework) starts
+        # step-wise progress from the first plan step.
+        if target == "execution":
+            task["step_index"] = 0
         self.save(task)
         return target
 
@@ -165,6 +173,8 @@ class TaskStore:
         data.setdefault("stage", "clarification")
         data.setdefault("current_step", "")
         data.setdefault("expected_action", "")
+        data.setdefault("plan_steps", [])
+        data.setdefault("step_index", 0)
         data.setdefault("description", "")
         data.setdefault("plan", "")
         data.setdefault("completed", [])

@@ -352,6 +352,24 @@ def handle_thread_summary(
 # ── Working memory (tasks) ──────────────────────────────────────────────────
 
 
+def render_plan_progress(task: dict) -> str | None:
+    """Render the plan as a checklist with per-step status, or None if no steps.
+
+    ✓ completed   ▶ in-progress   ○ pending
+    The leading glyphs are also used by the live input-panel to colour each line.
+    """
+    steps = task.get("plan_steps") or []
+    if not steps:
+        return None
+    idx = task.get("step_index", 0)
+    done = min(idx, len(steps))
+    lines = [f"Plan progress ({done}/{len(steps)})"]
+    for i, step in enumerate(steps):
+        glyph = "✓" if i < idx else ("▶" if i == idx else "○")
+        lines.append(f"{glyph} {step}")
+    return "\n".join(lines)
+
+
 def _format_task(task: dict) -> str:
     sep = "─" * 60
     lines = [
@@ -367,7 +385,11 @@ def _format_task(task: dict) -> str:
         lines.append(f"  Next:    {task['expected_action']}")
     if task.get("description"):
         lines.append(f"  Goal:    {task['description']}")
-    if task.get("plan"):
+    progress = render_plan_progress(task)
+    if progress:
+        lines += [""]
+        lines += [f"  {ln}" for ln in progress.splitlines()]
+    elif task.get("plan"):
         lines += ["", "  Plan:"]
         lines += [f"    {ln}" for ln in task["plan"].splitlines()]
     if task.get("completed"):

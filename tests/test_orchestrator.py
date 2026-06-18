@@ -4,7 +4,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from jarvis.pipeline.base import MARKER_FAIL, MARKER_NEEDS_USER, MARKER_PASS, MARKER_READY
+from jarvis.pipeline.base import (
+    MARKER_FAIL,
+    MARKER_NEEDS_USER,
+    MARKER_PASS,
+    MARKER_READY,
+    MARKER_STEP_DONE,
+)
 from jarvis.pipeline.orchestrator import Orchestrator
 from jarvis.pipeline.stages import STAGE_AGENTS
 from jarvis.session.task_store import TaskStore
@@ -45,6 +51,42 @@ class OrchestratorTest(unittest.TestCase):
         self.assertEqual([r.advanced_to for r in results], ["execution", "validation", "done"])
         self.assertEqual(task["stage"], "done")
         self.assertEqual(task["plan"], "1. a\n2. b")
+
+    def test_stepwise_execution_loops_until_ready(self):
+        task = self.tasks.new_task("demo")
+        task["stage"] = "execution"
+        task["plan"] = "1. a\n2. b\n3. c"
+        task["plan_steps"] = ["a", "b", "c"]
+        task["step_index"] = 0
+
+        # Two steps report STEP_DONE, the third reports READY; validation passes.
+        exec_replies = iter([
+            "did a\n" + MARKER_STEP_DONE,
+            "did b\n" + MARKER_STEP_DONE,
+            "did c\n" + MARKER_READY,
+        ])
+
+        def run_turn(entry, extra_system):
+            if task["stage"] == "execution":
+                return next(exec_replies)
+            return "all good\n" + MARKER_PASS
+
+        results = self.orch.run(task, run_turn, autonomy="auto")
+        exec_results = [r for r in results if r.stage == "execution"]
+        self.assertEqual(len(exec_results), 3)   # one turn per step
+        self.assertEqual(task["step_index"], 3)  # all steps complete
+        self.assertEqual(task["stage"], "done")  # rolled through validation -> done
+
+    def test_stepwise_execution_manual_runs_one_step(self):
+        task = self.tasks.new_task("demo")
+        task["stage"] = "execution"
+        task["plan_steps"] = ["a", "b"]
+        task["plan"] = "1. a\n2. b"
+        task["step_index"] = 0
+        results = self.orch.run(task, lambda e, x: "did a\n" + MARKER_STEP_DONE, autonomy="manual")
+        self.assertEqual(len(results), 1)
+        self.assertEqual(task["step_index"], 1)
+        self.assertEqual(task["stage"], "execution")  # manual: no auto-continue
 
     def test_clarification_is_a_gate(self):
         task = self.tasks.new_task("demo")  # clarification
