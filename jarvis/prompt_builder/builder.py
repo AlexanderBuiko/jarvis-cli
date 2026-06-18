@@ -29,16 +29,14 @@ _EXPERT_PANEL_INSTRUCTION = (
 )
 
 
-# Stage transitions are controlled explicitly (user via `task next`/`task back`,
-# or the orchestrator on autorun); the agent only does the work of the current
-# stage and never moves stages itself. Each stage's role lives on its StageAgent
+# The orchestrator drives stage transitions in code; the agent only does the work
+# of the current stage. Each stage's role lives on its StageAgent
 # (jarvis/pipeline/stages.py) as the single source — build_system_prompt reads it
 # from the registry so the chat path and the orchestrator never drift apart.
 _TASK_CONTROL_NOTE = (
-    "Stage control: you must NOT change the task stage yourself and must not claim a stage is "
-    "switched. Stage transitions happen only when the user runs `task next` (forward) or "
-    "`task back` (validation → execution). Just do the current stage's work and, when ready, tell "
-    "the user which command to run."
+    "Stage control: do only the current stage's work. You must NOT change the stage yourself, "
+    "claim a stage has switched, or tell the user to run any command — stage transitions are "
+    "handled for you."
 )
 
 

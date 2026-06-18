@@ -56,18 +56,19 @@ Commands
   session api                   Show raw API request/response payloads
 
   task                          Show the active task (working memory)
-  task new [name]               Create a task and start its pipeline
+  task new [name]               Create a task (your next message starts it)
   task list                     List all saved tasks and their stages
   task start <name-or-id>       Re-attach an existing task to this thread
-  task run                      Continue the active task's pipeline
+  task run                      Continue the active task with no new input
   task pause                    Unlink the active task (state preserved)
   task delete <name-or-id>      Permanently delete a task
   task done <item>              Record a completed item on the active task
   task todo <item>              Record a remaining item on the active task
 
   Stages: clarification → planning → execution → validation → done (enforced in code).
-  'task new' starts the pipeline; 'task run' continues it (e.g. after pausing or
-  switching threads). It pauses only when it needs you:
+  After 'task new', your next message drives the task; while a task is active your
+  messages keep driving it, and 'task run' continues with no new input. The pipeline
+  pauses only when it needs you:
     • a free-text question (clarification, or an execution step needing input), or
     • a Confirm / Reject choice at the two critical gates — plan approval and the
       final done decision (↑/↓ to move the arrow, Enter to choose). Reject asks
@@ -423,7 +424,7 @@ def handle_task_new(args: list[str], agent: JarvisAgent) -> str:
     task = agent.create_task(name)
     return (
         f"Task created: '{task['name']}' ({task['id']}). "
-        f"Stage: {task['stage']}. This thread is now linked to it."
+        f"Describe what you want to accomplish to begin (your next message starts it)."
     )
 
 

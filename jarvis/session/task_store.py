@@ -8,7 +8,7 @@ It lives independently of any thread as a JSON file under ~/.jarvis/tasks/<id>.j
     "name":          "Prepare Android interview",
     "stage":         "execution",
     "current_step":  "…",          # the step being worked within the current stage
-    "expected_action": "…",        # machine-readable next action (e.g. await_user, run:task next)
+    "expected_action": "…",        # machine-readable next action (e.g. await_user, await_plan_approval)
     "plan_steps":    ["…", …],     # the plan parsed into ordered, trackable steps
     "step_index":    2,            # index of the in-progress step (steps before it are done)
     "description":   "…",

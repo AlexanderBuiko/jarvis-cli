@@ -83,7 +83,7 @@ def run_repl(agent: JarvisAgent, config_manager: ConfigManager) -> None:
         task = agent.active_task
         if not task or task.get("stage") == "done":
             return ""
-        return f"Task '{task['name']}' is at the {task['stage']} stage — type 'task run' to continue."
+        return f"Task '{task['name']}' ({task['stage']}) — type your message to continue, or 'task run'."
 
     controller = InputController(status_fn=_status_fn, progress_fn=_progress_fn, hint_fn=_hint_fn)
 
@@ -97,11 +97,16 @@ def run_repl(agent: JarvisAgent, config_manager: ConfigManager) -> None:
         if input_type == "command":
             output = _dispatch(raw, agent, config_manager, controller)
         else:
-            try:
-                reply, _ = _run_with_spinner(lambda: agent.chat(raw))
-                output = f"A: {reply}"
-            except Exception as exc:
-                output = f"Error: {exc}"
+            task = agent.active_task
+            if task and task.get("stage") != "done":
+                # An active task owns prompt input: this message drives its pipeline.
+                output = _drive_task(agent, controller, initial_pending=f"The user says: {raw}")
+            else:
+                try:
+                    reply, _ = _run_with_spinner(lambda: agent.chat(raw))
+                    output = f"A: {reply}"
+                except Exception as exc:
+                    output = f"Error: {exc}"
 
         if output:
             print(output)
@@ -386,15 +391,7 @@ def _dispatch(
             return handle_task_show(agent)
         sub = args[0].lower()
         if sub == "new":
-            created = handle_task_new(args[1:], agent)
-            print(created)
-            # Capture the actual request up front so clarification starts with it
-            # instead of opening with "I have no information about this task".
-            request = controller.read_text("What do you want to accomplish?")
-            if not request:
-                return "Task created. Run 'task run' when you're ready to describe it."
-            pending = f"The user's request: {request}"
-            return _drive_task(agent, controller, pending)
+            return handle_task_new(args[1:], agent)
         if sub == "list":
             return handle_task_list(agent)
         if sub == "show":

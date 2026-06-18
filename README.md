@@ -171,14 +171,15 @@ prompt and (later) tools. An **orchestrator** drives the FSM across these agents
 
 | Command | Description |
 |---|---|
-| `task new [name]` | Create a task **and start its pipeline** |
-| `task run` | Continue the active task's pipeline |
+| `task new [name]` | Create a task — **your next message starts it** |
+| `task run` | Continue the active task with no new input |
 | `task start <name-or-id>` | Re-attach an existing task (e.g. in another thread) |
 | `task pause` | Unlink the active task (state preserved) |
 | `task show` / `task list` | Inspect task state |
 
-`task new` starts the pipeline; `task run` continues it (after pausing, stopping,
-or switching threads). It **pauses only when it needs you**:
+After `task new`, **your next message drives the task**; while a task is active your
+messages keep driving it, and `task run` continues with no new input. The pipeline
+**pauses only when it needs you**:
 
 - a **free-text question** — clarification, or an execution step that needs input;
 - a **Confirm / Reject** choice at the two critical gates — **plan approval** and the
