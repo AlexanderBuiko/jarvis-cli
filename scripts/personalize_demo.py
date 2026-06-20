@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from jarvis.config.manager import ConfigManager
 from jarvis.openrouter.client import OpenRouterClient
 from jarvis.agent import JarvisAgent
-from jarvis.session.long_term_memory import LongTermMemory
+from jarvis.session.profile_store import ProfileStore
 from jarvis.session.behavior_log import BehaviorLog
 
 SEP = "─" * 70
@@ -74,17 +74,18 @@ def main() -> None:
 
     agent = JarvisAgent(client, config)
 
-    # Isolate memory + behaviour log in temp dirs (real ~/.jarvis untouched).
+    # Isolate profile + behaviour log in temp dirs (real ~/.jarvis untouched).
     tmp = Path(tempfile.mkdtemp(prefix="jarvis-personalize-"))
-    agent._memory = LongTermMemory(tmp / "memory")
+    (tmp / "memory").mkdir(parents=True, exist_ok=True)
+    agent._profile = ProfileStore(tmp / "memory")
     agent._behavior = BehaviorLog(tmp / "behavior.jsonl")
-    agent._memory.write("profile", PROFILE_MD)
+    agent._profile.write(PROFILE_MD)
 
     # ── 1. Show the starting profile ─────────────────────────────────────────
     print(SEP)
     print("1. Starting profile.md")
     print(SEP)
-    print(agent.read_memory("profile"))
+    print(agent.read_profile())
 
     # ── 2. New thread + several real questions ───────────────────────────────
     agent.new_thread("personalize-demo")
@@ -117,7 +118,7 @@ def main() -> None:
     print("\n" + SEP)
     print("4. Updated profile.md (only the Style section changed)")
     print(SEP)
-    print(agent.read_memory("profile"))
+    print(agent.read_profile())
 
     print(SEP)
     print("Constraints (free/open-source) and Context (backend engineer) are")

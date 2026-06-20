@@ -37,16 +37,12 @@ from .commands import (
     handle_task_start,
     handle_task_exit,
     handle_task_delete,
-    handle_memory_list,
-    handle_memory_init,
-    handle_memory_edit,
-    handle_memory_show,
-    handle_memory_load,
-    handle_memory_unload,
-    handle_memory_write,
-    handle_memory_append,
-    handle_memory_delete,
+    handle_invariants_show,
+    handle_invariants_init,
+    handle_profile_show,
+    handle_profile_onboard,
     handle_personalize,
+    run_onboarding,
     render_plan_progress,
 )
 from .input import InputController
@@ -58,6 +54,16 @@ from ..pipeline.base import GATE_APPROVAL, GATE_QUESTION
 
 def run_repl(agent: JarvisAgent, config_manager: ConfigManager) -> None:
     print(_banner())
+
+    # First run: no profile yet → offer the onboarding interview (skippable).
+    if not agent.profile_exists():
+        try:
+            print(run_onboarding(agent))
+        except (EOFError, KeyboardInterrupt):
+            agent.skip_onboarding()
+            print("\nOnboarding skipped — a default profile was created.")
+        print()
+
     print("Starts in prompt mode (>). Type ! on an empty line to switch modes.\n")
 
     def _status_fn() -> str:
@@ -436,29 +442,25 @@ def _dispatch(
             "task run | task exit | task delete <name-or-id>"
         )
 
-    if cmd == "memory":
+    if cmd == "invariants":
         if not args:
-            return handle_memory_list(agent)
+            return handle_invariants_show(agent)
         sub = args[0].lower()
-        if sub == "list":
-            return handle_memory_list(agent)
-        if sub == "init":
-            return handle_memory_init(agent)
-        if sub == "edit":
-            return handle_memory_edit(args[1:], agent)
         if sub == "show":
-            return handle_memory_show(args[1:], agent)
-        if sub == "load":
-            return handle_memory_load(args[1:], agent)
-        if sub == "unload":
-            return handle_memory_unload(args[1:], agent)
-        if sub == "write":
-            return handle_memory_write(args[1:], agent)
-        if sub == "append":
-            return handle_memory_append(args[1:], agent)
-        if sub == "delete":
-            return handle_memory_delete(args[1:], agent)
-        return "Usage: memory | memory init | memory edit <name> | memory show <name> | memory load <name> | memory unload <name> | memory write <name> <text> | memory append <name> <text> | memory delete <name>"
+            return handle_invariants_show(agent)
+        if sub == "init":
+            return handle_invariants_init(agent)
+        return "Usage: invariants | invariants init"
+
+    if cmd == "profile":
+        if not args:
+            return handle_profile_show(agent)
+        sub = args[0].lower()
+        if sub == "show":
+            return handle_profile_show(agent)
+        if sub == "onboard":
+            return handle_profile_onboard(agent)
+        return "Usage: profile | profile onboard"
 
     if cmd == "personalize":
         return handle_personalize(agent)

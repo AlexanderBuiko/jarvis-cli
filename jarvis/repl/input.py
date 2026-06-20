@@ -43,7 +43,8 @@ COMMAND_TREE: dict[str, dict] = {
     "thread":  {"summary": {}, "load": {}, "new": {}, "clear": {}, "rename": {}, "delete": {}},
     "config":  {"show": {}, "set": {}, "update": {}, "reset": {}},
     "task":    {"new": {}, "list": {}, "show": {}, "start": {}, "run": {}, "exit": {}, "delete": {}},
-    "memory":  {"list": {}, "init": {}, "edit": {}, "show": {}, "load": {}, "unload": {}, "write": {}, "append": {}, "delete": {}},
+    "invariants": {"show": {}, "init": {}},
+    "profile": {"show": {}, "onboard": {}},
     "personalize": {},
     "help":    {},
     "exit":    {},
@@ -500,6 +501,7 @@ class InputController:
             # block does not linger above the printed output.
             self._suggestions = []
             self._suggestion_idx = 0
+            event.app.invalidate()
             event.app.exit()
 
         @kb.add(Keys.BracketedPaste)

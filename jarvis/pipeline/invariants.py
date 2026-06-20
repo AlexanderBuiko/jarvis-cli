@@ -3,9 +3,10 @@ InvariantChecker — the natural-language "requirements linter".
 
 A first-class response validator (one of the abstractions the tutor's architecture
 note calls for). It checks a reply against the configured invariants in code, and
-reworks it once on a violation. Kept distinct from the ValidatorAgent: this is a
-per-turn, cross-cutting filter on every answer, whereas the ValidatorAgent validates
-the task *result* at the validation stage.
+on a violation regenerates it once to either correct accidental drift while staying
+compliant OR refuse the request and explain the conflict (refuse-and-explain). Kept
+distinct from the ValidatorAgent: this is a per-turn, cross-cutting filter on every
+answer, whereas the ValidatorAgent validates the task *result* at the validation stage.
 """
 
 from ..llm.accounting import make_call_record
@@ -13,7 +14,7 @@ from ..llm.engine import LLMEngine
 from ..openrouter.client import Completion
 from ..prompt_builder.builder import (
     build_invariant_check_prompt,
-    build_invariant_rework_prompt,
+    build_invariant_resolution_prompt,
 )
 
 
@@ -30,9 +31,11 @@ class InvariantChecker:
         params: dict,
         api_calls: list[dict],
     ) -> tuple[str, str | None, Completion]:
-        """Check the reply against the invariants; rework once on violation.
+        """Check the reply against the invariants; resolve once on violation.
 
-        Appends each LLM call it makes to ``api_calls`` (preserving the caller's
+        On a violation the reply is regenerated to correct compliant drift, or to
+        refuse and explain when the request cannot be satisfied without breaking an
+        invariant. Appends each LLM call to ``api_calls`` (preserving the caller's
         running index). Returns (final_text, notice_or_None, completion_for_finish_reason).
         """
         check_prompt = build_invariant_check_prompt(invariants, response_text)
@@ -43,15 +46,18 @@ class InvariantChecker:
         if _invariants_ok(check.text):
             return response_text, None, completion
 
-        rework_prompt = build_invariant_rework_prompt(invariants, response_text, check.text.strip())
-        rework_messages = messages + [
+        resolution_prompt = build_invariant_resolution_prompt(invariants, response_text, check.text.strip())
+        resolution_messages = messages + [
             {"role": "assistant", "content": response_text},
-            {"role": "user", "content": rework_prompt},
+            {"role": "user", "content": resolution_prompt},
         ]
-        rework = self._engine.complete(rework_messages, params)
-        api_calls.append(make_call_record(len(api_calls) + 1, "invariant_rework", rework, self._engine))
-        notice = "[Invariant check: reply revised to satisfy the configured invariants.]"
-        return rework.text.strip(), notice, rework
+        resolution = self._engine.complete(resolution_messages, params)
+        api_calls.append(make_call_record(len(api_calls) + 1, "invariant_resolution", resolution, self._engine))
+        notice = (
+            "[Invariant check: your request conflicted with the configured invariants — "
+            "the reply above was adjusted or declined to respect them.]"
+        )
+        return resolution.text.strip(), notice, resolution
 
 
 def _invariants_ok(verdict: str) -> bool:

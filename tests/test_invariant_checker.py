@@ -52,8 +52,8 @@ class InvariantCheckerTest(unittest.TestCase):
         self.assertEqual(len(api_calls), 1)
         self.assertEqual(api_calls[0]["label"], "invariant_check")
 
-    def test_violation_triggers_single_rework(self):
-        engine = FakeEngine(scripted=["- rule : violated", "reworked answer"])
+    def test_violation_triggers_single_resolution(self):
+        engine = FakeEngine(scripted=["- rule : violated", "resolved answer"])
         checker = InvariantChecker(engine)
         api_calls: list[dict] = []
 
@@ -66,12 +66,12 @@ class InvariantCheckerTest(unittest.TestCase):
             api_calls=api_calls,
         )
 
-        self.assertEqual(text, "reworked answer")
+        self.assertEqual(text, "resolved answer")
         self.assertIsNotNone(notice)
-        self.assertEqual([c["label"] for c in api_calls], ["invariant_check", "invariant_rework"])
-        # The rework call must include the prior reply + the rework instruction.
-        rework_messages = engine.calls[1][0]
-        self.assertEqual(rework_messages[-2]["content"], "bad answer")
+        self.assertEqual([c["label"] for c in api_calls], ["invariant_check", "invariant_resolution"])
+        # The resolution call must include the prior reply + the resolution instruction.
+        resolution_messages = engine.calls[1][0]
+        self.assertEqual(resolution_messages[-2]["content"], "bad answer")
 
 
 if __name__ == "__main__":

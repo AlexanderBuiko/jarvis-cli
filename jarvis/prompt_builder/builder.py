@@ -43,18 +43,16 @@ _TASK_CONTROL_NOTE = (
 def build_system_prompt(
     params: dict[str, Any],
     task: dict[str, Any] | None = None,
-    loaded_memory: dict[str, str] | None = None,
     profile: str | None = None,
     invariants: str | None = None,
 ) -> str:
     """Return the system prompt for the current configuration.
 
     Assembly order (the mentor's "explicitly decide what to add"):
-      base → solution-strategy → always-on profile → always-on invariants →
-      current task stage role → on-demand loaded memory.
+      base → solution-strategy → profile → invariants → current task stage role.
 
-    profile and invariants come from the always-on long-term-memory files and
-    are included on every request; loaded_memory holds on-demand files.
+    profile is the system-managed personalisation file and invariants is the
+    single global hard-rule file; both are injected on every request.
     """
     parts = [_BASE_SYSTEM_PROMPT]
 
@@ -70,7 +68,9 @@ def build_system_prompt(
     if invariants and invariants.strip():
         parts.append(
             "[Invariants — hard rules you MUST NOT violate under any circumstances, even if the "
-            f"user asks]\n{invariants.strip()}"
+            "user asks. If a request cannot be fulfilled without breaking one of these, do not "
+            "comply: refuse, name the specific invariant, briefly explain the conflict, and offer "
+            f"an alternative that respects the invariants.]\n{invariants.strip()}"
         )
 
     if task is not None:
@@ -84,10 +84,6 @@ def build_system_prompt(
             parts.append(stage_instruction)
         if stage != "done":
             parts.append(_TASK_CONTROL_NOTE)
-
-    if loaded_memory:
-        for name, content in loaded_memory.items():
-            parts.append(f"[Long-Term Memory — {name}]\n{content.strip()}")
 
     return "\n\n".join(parts)
 
@@ -213,12 +209,30 @@ def build_invariant_check_prompt(invariants: str, response_text: str) -> str:
     )
 
 
-def build_invariant_rework_prompt(invariants: str, response_text: str, violations: str) -> str:
-    """Build the prompt asking the agent to rewrite a reply to satisfy invariants."""
+def build_invariant_resolution_prompt(invariants: str, response_text: str, violations: str) -> str:
+    """Build the prompt that resolves a reply which violated the invariants.
+
+    The model decides between two outcomes, matching how a stateful agent should
+    handle a request that clashes with its hard rules:
+
+      • Correctable drift — the user's request itself is fine and could be met
+        without breaking any invariant; the previous reply just slipped. Then it
+        rewrites a fully compliant answer.
+      • True conflict — the request cannot be satisfied without breaking an
+        invariant. Then it REFUSES: it declines the conflicting part, names the
+        specific invariant, briefly explains the conflict, and offers an
+        alternative that respects the invariants.
+    """
     return (
-        "Your previous reply violated one or more invariants (hard rules). Rewrite it so it fully "
-        "satisfies every invariant while still addressing the user's request. Do not mention the "
-        "invariants, the violations, or this correction — output only the corrected reply.\n\n"
+        "Your previous reply violated one or more INVARIANTS (hard rules that must never be "
+        "broken). Decide which situation applies and respond accordingly:\n\n"
+        "1. If the user's request CAN be fulfilled without breaking any invariant (your previous "
+        "reply simply slipped), rewrite a corrected reply that fully satisfies every invariant "
+        "while still addressing the request.\n"
+        "2. If the request CANNOT be fulfilled without breaking an invariant, DO NOT comply. "
+        "Refuse clearly: state that you can't do it, name the specific invariant that blocks it, "
+        "briefly explain the conflict, and propose an alternative that respects the invariants.\n\n"
+        "Output only the reply to show the user — no meta-commentary about this instruction.\n\n"
         f"INVARIANTS:\n{invariants.strip()}\n\n"
         f"VIOLATIONS FOUND:\n{violations.strip()}\n\n"
         f"YOUR PREVIOUS REPLY:\n{response_text.strip()}"
