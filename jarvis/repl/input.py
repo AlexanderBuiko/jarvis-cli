@@ -42,7 +42,8 @@ COMMAND_TREE: dict[str, dict] = {
     "thread":  {"summary": {}, "load": {}, "new": {}, "clear": {}, "rename": {}, "delete": {}},
     "config":  {"show": {}, "set": {}, "update": {}, "reset": {}},
     "task":    {"new": {}, "list": {}, "show": {}, "start": {}, "next": {}, "back": {}, "pause": {}, "delete": {}, "done": {}, "todo": {}},
-    "memory":  {"list": {}, "init": {}, "edit": {}, "show": {}, "load": {}, "unload": {}, "write": {}, "append": {}, "delete": {}},
+    "invariants": {"show": {}, "init": {}},
+    "profile": {"show": {}, "onboard": {}},
     "personalize": {},
     "help":    {},
     "exit":    {},
@@ -50,6 +51,10 @@ COMMAND_TREE: dict[str, dict] = {
 
 MAX_SUGGESTIONS = 5
 SUGGESTION_COLOR = "#a1a9b7"
+
+# Input field grows as long text wraps, but never beyond this many rows; past it
+# the field stays fixed and scrolls internally.
+MAX_INPUT_ROWS = 5
 
 
 # ── Suggestion logic ──────────────────────────────────────────────────────────
@@ -210,7 +215,11 @@ class InputController:
         input_window = FloatContainer(
             content=Window(
                 content=BufferControl(buffer=self._buffer),
-                height=Dimension(min=1, max=1),
+                # Wrap long input onto additional rows and grow the field to fit,
+                # instead of clamping to one row and scrolling horizontally.
+                # Capped at MAX_INPUT_ROWS rows; beyond that it scrolls internally.
+                height=Dimension(min=1, max=MAX_INPUT_ROWS),
+                wrap_lines=True,
                 dont_extend_height=True,
             ),
             floats=[
@@ -328,6 +337,12 @@ class InputController:
             hist = self._prompt_hist if self._mode == "prompt" else self._command_hist
             _add_history(hist, text)
             self._result = text
+            # Drop the suggestion list so the final render erases those lines
+            # (the app does not erase its output on exit, so a leftover
+            # suggestions window would otherwise stay on screen).
+            self._suggestions = []
+            self._suggestion_idx = 0
+            event.app.invalidate()
             event.app.exit()
 
         @kb.add("up", eager=True)

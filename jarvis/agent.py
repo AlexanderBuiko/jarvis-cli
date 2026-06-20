@@ -16,14 +16,15 @@ from .prompt_builder.builder import (
     build_facts_extraction_prompt,
     build_topic_routing_prompt,
     build_invariant_check_prompt,
-    build_invariant_rework_prompt,
+    build_invariant_resolution_prompt,
     build_profile_style_prompt,
     _PROFILE_NO_CHANGE,
 )
 from .session.store import SessionStore
 from .session.thread_store import ThreadStore
 from .session.task_store import TaskStore
-from .session.long_term_memory import LongTermMemory
+from .session.profile_store import ProfileStore
+from .session.invariant_store import InvariantStore
 from .session.behavior_log import BehaviorLog
 
 
@@ -37,11 +38,14 @@ _RECENT_TURNS: int = 5
 _DEFAULT_WINDOW_SIZE: int = 10
 
 # API-call labels that count as the user-facing answer (for context-fill metric).
-_ANSWER_LABELS: frozenset[str] = frozenset({"final_answer", "invariant_rework"})
+_ANSWER_LABELS: frozenset[str] = frozenset({"final_answer", "invariant_resolution"})
 
 # Every N recorded interactions, remind the user they can refresh their style
-# profile from recent behaviour (`profile`). This is only a nudge — no LLM call.
+# profile from recent behaviour (`personalize`). This is only a nudge — no LLM call.
 _PROFILE_NUDGE_INTERVAL: int = 5
+
+# How many of the most recent behaviour-log notes the personaliser learns from.
+_PERSONALIZE_WINDOW: int = 100
 
 # Opening instruction generated when the user advances into a stage (`task next`),
 # so the new stage's work appears immediately without a separate user message.
@@ -83,7 +87,8 @@ class JarvisAgent:
         self._threads = ThreadStore()
         self._threads.migrate_legacy()
         self._tasks = TaskStore()
-        self._memory = LongTermMemory()
+        self._profile = ProfileStore()
+        self._invariants = InvariantStore()
         self._behavior = BehaviorLog()
         # Counts interactions this session to pace the personalisation nudge
         # (independent of the on-disk log, which is capped and would plateau).
@@ -91,8 +96,6 @@ class JarvisAgent:
 
         # Working-memory task linked to the active thread (None when unlinked).
         self._active_task: dict | None = None
-        # Long-term memory files explicitly loaded for this session (name -> content).
-        self._loaded_memory: dict[str, str] = {}
 
         last = self._threads.load_last()
         if last:
@@ -133,11 +136,12 @@ class JarvisAgent:
         api_calls: list[dict] = []
         generated_prompt: str | None = None
 
-        # Always-on long-term memory: profile + invariants go into every system
-        # prompt. Task stage instructions and on-demand loaded memory are added too.
-        profile, invariants = self._always_on_memory()
+        # Personalisation + invariants go into every system prompt, alongside any
+        # active task's stage instructions.
+        profile = self._profile.read_active()
+        invariants = self._invariants.read_active()
         system_prompt = build_system_prompt(
-            params, self._active_task, self._loaded_memory, profile, invariants
+            params, self._active_task, profile, invariants
         )
 
         if params.get("solution_strategy") == "prompt_generation":
@@ -546,70 +550,45 @@ class JarvisAgent:
         self._tasks.save(self._active_task)
         return True
 
-    # ── Long-term memory ───────────────────────────────────────────────────────
+    # ── Invariants (single global hard-rule file) ───────────────────────────────
 
-    @property
-    def loaded_memory(self) -> dict[str, str]:
-        return dict(self._loaded_memory)
+    def read_invariants(self) -> str | None:
+        return self._invariants.read()
 
-    def list_memory(self) -> list[str]:
-        return self._memory.list_files()
+    def invariants_exist(self) -> bool:
+        return self._invariants.exists()
 
-    def read_memory(self, name: str) -> str | None:
-        return self._memory.read(name)
+    def init_invariants(self) -> bool:
+        """Scaffold invariants.md from the template if missing. True if created."""
+        return self._invariants.init()
 
-    def load_memory(self, name: str) -> str | None:
-        """Load a memory file into the session so it is injected into requests."""
-        name = self._memory.normalize(name)
-        content = self._memory.read(name)
-        if content is None:
-            return None
-        self._loaded_memory[name] = content
-        return name
+    def invariants_path(self):
+        """Filesystem path of invariants.md (for editing in $EDITOR)."""
+        return self._invariants.path_for()
 
-    def unload_memory(self, name: str) -> bool:
-        return self._loaded_memory.pop(self._memory.normalize(name), None) is not None
+    # ── Profile (system-managed: onboarding + personalisation) ───────────────────
 
-    def write_memory(self, name: str, content: str) -> None:
-        """Create or overwrite a memory file (refreshing it if currently loaded)."""
-        name = self._memory.normalize(name)
-        self._memory.write(name, content)
-        if name in self._loaded_memory:
-            self._loaded_memory[name] = content
+    def profile_exists(self) -> bool:
+        return self._profile.exists()
 
-    def append_memory(self, name: str, line: str) -> None:
-        name = self._memory.normalize(name)
-        self._memory.append(name, line)
-        if name in self._loaded_memory:
-            self._loaded_memory[name] = self._memory.read(name) or ""
+    def read_profile(self) -> str | None:
+        return self._profile.read()
 
-    def delete_memory(self, name: str) -> bool:
-        name = self._memory.normalize(name)
-        self._loaded_memory.pop(name, None)
-        return self._memory.delete(name)
+    def onboard_profile(self, style: str, constraints: str, context: str) -> None:
+        """Write profile.md from the onboarding interview answers."""
+        self._profile.write_sections(style, constraints, context)
 
-    def init_memory(self) -> list[str]:
-        """Scaffold the always-on memory files (profile, invariants) if missing."""
-        return self._memory.init_always_on()
-
-    def memory_path(self, name: str):
-        """Filesystem path of a memory file (for editing in $EDITOR)."""
-        return self._memory.path_for(name)
-
-    def refresh_memory(self, name: str) -> None:
-        """Re-read a memory file from disk (after an external edit) if it is loaded."""
-        if name in self._loaded_memory:
-            self._loaded_memory[name] = self._memory.read(name) or ""
-
-    # ── Profile personalisation ────────────────────────────────────────────────
+    def skip_onboarding(self) -> None:
+        """Write a minimal default profile when the user skips the interview."""
+        self._profile.write_default()
 
     def _maybe_profile_nudge(self) -> str | None:
         """Return a one-line reminder every N interactions (no LLM call).
 
         Only nudges when a profile with a Style section exists, since that is the
-        only thing `profile` can refine.
+        only thing `personalize` can refine.
         """
-        if self._memory.read_profile_style() is None:
+        if self._profile.read_style() is None:
             return None
         if self._interactions > 0 and self._interactions % _PROFILE_NUDGE_INTERVAL == 0:
             return (
@@ -621,17 +600,17 @@ class JarvisAgent:
     def propose_profile_style(self) -> tuple[str | None, str | None, str | None]:
         """Generate a proposed new Style section from recent behaviour.
 
+        Learns from the most recent _PERSONALIZE_WINDOW behaviour-log notes.
         Returns (current_style, proposed_style, error). On success error is None;
         proposed_style is None when the model judges no change is warranted. Makes
         one LLM call; not billed to the thread (an out-of-conversation admin action).
         """
-        current = self._memory.read_profile_style()
+        current = self._profile.read_style()
         if current is None:
             return None, None, (
-                "No profile.md with a '## Style' section. Run 'memory init' (or "
-                "'memory edit profile') first."
+                "No profile.md with a '## Style' section. Run 'profile onboard' first."
             )
-        recent = self._behavior.recent(_PROFILE_NUDGE_INTERVAL * 4)
+        recent = self._behavior.recent(_PERSONALIZE_WINDOW)
         if not recent:
             return current, None, "No recorded activity yet to learn from."
 
@@ -645,7 +624,7 @@ class JarvisAgent:
 
     def apply_profile_style(self, new_style: str) -> bool:
         """Overwrite only the Style section of profile.md with new_style."""
-        return self._memory.replace_profile_style(new_style)
+        return self._profile.replace_style(new_style)
 
     def get_context_window(self, model_id: str) -> int | None:
         return self._client.get_context_window(model_id)
@@ -661,11 +640,6 @@ class JarvisAgent:
         task_id = self._threads.get_active_task_id(self._thread_id)
         self._active_task = self._tasks.load(task_id) if task_id else None
 
-    def _always_on_memory(self) -> tuple[str | None, str | None]:
-        """Return (profile, invariants) content from the always-on memory files."""
-        data = self._memory.read_always_on()
-        return data.get("profile"), data.get("invariants")
-
     def _validate_invariants(
         self,
         invariants: str,
@@ -675,7 +649,11 @@ class JarvisAgent:
         params: dict,
         api_calls: list[dict],
     ) -> tuple[str, str | None, "Completion"]:
-        """Check the reply against the invariants in code; rework once on violation.
+        """Check the reply against the invariants in code; resolve once on violation.
+
+        On a violation the reply is regenerated to either (a) correct accidental
+        drift while staying compliant, or (b) refuse the request and explain the
+        conflict when it cannot be satisfied without breaking an invariant.
 
         Returns (final_text, notice_or_None, completion_for_finish_reason).
         """
@@ -687,15 +665,20 @@ class JarvisAgent:
         if _invariants_ok(check.text):
             return response_text, None, completion
 
-        rework_prompt = build_invariant_rework_prompt(invariants, response_text, check.text.strip())
-        rework_messages = messages + [
+        resolution_prompt = build_invariant_resolution_prompt(
+            invariants, response_text, check.text.strip()
+        )
+        resolution_messages = messages + [
             {"role": "assistant", "content": response_text},
-            {"role": "user", "content": rework_prompt},
+            {"role": "user", "content": resolution_prompt},
         ]
-        rework = self._client.complete(rework_messages, params)
-        api_calls.append(_make_call_record(len(api_calls) + 1, "invariant_rework", rework, self._client))
-        notice = "[Invariant check: reply revised to satisfy the configured invariants.]"
-        return rework.text.strip(), notice, rework
+        resolution = self._client.complete(resolution_messages, params)
+        api_calls.append(_make_call_record(len(api_calls) + 1, "invariant_resolution", resolution, self._client))
+        notice = (
+            "[Invariant check: your request conflicted with the configured invariants — "
+            "the reply above was adjusted or declined to respect them.]"
+        )
+        return resolution.text.strip(), notice, resolution
 
     def _build_context(self, active_topic: str | None = None) -> list[dict]:
         """Return the message list to include in the next API request.

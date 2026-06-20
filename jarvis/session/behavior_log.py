@@ -16,9 +16,9 @@ from pathlib import Path
 
 _LOG_PATH = Path.home() / ".jarvis" / "behavior.jsonl"
 
-# Keep the log bounded: only the most recent interactions inform personalisation,
+# Keep the log bounded: personalisation learns from the most recent 100 notes,
 # so the file is trimmed to this many lines on write. Older records are dropped.
-_MAX_RECORDS = 50
+_MAX_RECORDS = 100
 
 
 class BehaviorLog:

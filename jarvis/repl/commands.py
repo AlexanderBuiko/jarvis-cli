@@ -2,12 +2,9 @@
 REPL command handlers.
 
 Each handler receives parsed arguments and shared application state, and
-returns a string to print. Handlers are pure except `memory edit`, which
-launches the user's $EDITOR.
+returns a string to print. Handlers are pure except `personalize`, which
+prompts for confirmation before applying a profile update.
 """
-
-import os
-import subprocess
 
 from ..agent import JarvisAgent, _COMPRESSION_INTERVAL
 from ..config.manager import ConfigManager
@@ -69,18 +66,19 @@ Commands
   Stages: clarification → planning → execution → validation → done.
   The agent never changes stage itself; you advance with 'task next' / 'task back'.
 
-  memory                        List long-term memory files
-  memory init                   Scaffold always-on profile.md + invariants.md
-  memory edit <name>            Open a memory file in $EDITOR
-  memory show <name>            Print a memory file
-  memory load <name>            Inject an on-demand memory file into the system prompt
-  memory unload <name>          Stop injecting a memory file
-  memory write <name> <text>    Create or overwrite a memory file
-  memory append <name> <text>   Append a line to a memory file
-  memory delete <name>          Delete a memory file
+  invariants                    Show the global invariants (hard rules)
+  invariants init               Scaffold invariants.md from a template
 
-  profile.md and invariants.md are always injected into every prompt (all threads).
-  invariants.md is also enforced in code: replies are checked and reworked on violation.
+  profile                       Show the system-managed user profile
+  profile onboard               Run (or re-run) the onboarding interview
+
+  invariants.md is the single, app-wide hard-rule file. Scaffold it with
+  'invariants init', then edit ~/.jarvis/memory/invariants.md directly.
+  It is injected into every prompt AND enforced in code: when a request conflicts
+  with an invariant, the agent refuses, names the invariant, and explains why.
+
+  profile.md is system-managed: created by 'profile onboard' and refined by
+  'personalize'. It is injected into every prompt (all threads).
 
   personalize                   Propose a profile.md Style update from recent activity
                                 (shows current vs proposed, asks before overwriting).
@@ -468,105 +466,81 @@ def handle_task_todo(args: list[str], agent: JarvisAgent) -> str:
     return "Recorded remaining item."
 
 
-# ── Long-term memory ────────────────────────────────────────────────────────
+# ── Invariants (single global hard-rule file) ────────────────────────────────
 
 
-def handle_memory_list(agent: JarvisAgent) -> str:
-    from ..session.long_term_memory import ALWAYS_ON
-    files = agent.list_memory()
-    loaded = agent.loaded_memory
-    if not files:
-        return "No memory files. Use 'memory init' to scaffold profile + invariants."
+def handle_invariants_show(agent: JarvisAgent) -> str:
+    content = agent.read_invariants()
+    if content is None or not content.strip():
+        return "No invariants set. Use 'invariants init' to scaffold, then edit the file."
     sep = "─" * 60
-    lines = [f"Long-Term Memory ({len(files)})", sep]
-    for name in files:
-        if name in ALWAYS_ON:
-            tag = "  [always-on]"
-        elif name in loaded:
-            tag = "  [loaded]"
-        else:
-            tag = ""
-        lines.append(f"  {name}.md{tag}")
-    lines.append(sep)
-    lines.append("always-on files inject into every prompt; others: 'memory load <name>'")
-    return "\n".join(lines)
+    return (
+        f"Invariants (global hard rules)\n{sep}\n{content.rstrip()}\n{sep}\n"
+        f"Edit directly: {agent.invariants_path()}"
+    )
 
 
-def handle_memory_init(agent: JarvisAgent) -> str:
-    created = agent.init_memory()
-    if not created:
-        return "Always-on files already exist (profile.md, invariants.md). Use 'memory edit <name>'."
-    return f"Scaffolded: {', '.join(n + '.md' for n in created)}. Edit with 'memory edit <name>'."
+def handle_invariants_init(agent: JarvisAgent) -> str:
+    path = agent.invariants_path()
+    if not agent.init_invariants():
+        return f"invariants.md already exists. Edit it directly:\n  {path}"
+    return f"Scaffolded invariants.md. Edit it directly:\n  {path}"
 
 
-def handle_memory_edit(args: list[str], agent: JarvisAgent) -> str:
-    if not args:
-        return "Usage: memory edit <name>"
-    name = args[0]
-    # Create an empty file if it does not exist yet, so the editor opens cleanly.
-    if agent.read_memory(name) is None:
-        agent.write_memory(name, "")
-    path = agent.memory_path(name)
-    editor = os.environ.get("EDITOR") or os.environ.get("VISUAL") or "vi"
-    try:
-        subprocess.call([editor, str(path)])
-    except Exception as exc:  # editor missing / non-interactive
-        return f"Could not launch editor ({exc}). Edit the file directly:\n  {path}"
-    agent.refresh_memory(name)
-    return f"Saved {name}.md."
+# ── Profile (system-managed) ──────────────────────────────────────────────────
 
 
-def handle_memory_show(args: list[str], agent: JarvisAgent) -> str:
-    if not args:
-        return "Usage: memory show <name>"
-    from ..session.long_term_memory import LongTermMemory
-    name = LongTermMemory.normalize(args[0])
-    content = agent.read_memory(name)
-    if content is None:
-        return f"Memory file not found: '{name}'."
+def handle_profile_show(agent: JarvisAgent) -> str:
+    content = agent.read_profile()
+    if content is None or not content.strip():
+        return "No profile yet. Run 'profile onboard' to create one."
     sep = "─" * 60
-    return f"{name}.md\n{sep}\n{content.rstrip()}\n{sep}"
+    return f"Profile (system-managed)\n{sep}\n{content.rstrip()}\n{sep}"
 
 
-def handle_memory_load(args: list[str], agent: JarvisAgent) -> str:
-    if not args:
-        return "Usage: memory load <name>"
-    name = agent.load_memory(args[0])
-    if name is None:
-        return f"Memory file not found: '{args[0]}'."
-    return f"Memory '{name}' loaded into the system prompt for this session."
+_ONBOARD_QUESTIONS = [
+    (
+        "style",
+        "1/3  Style — how should answers look? "
+        "(e.g. brief or detailed, formal or conversational, code examples?)\n> ",
+    ),
+    (
+        "constraints",
+        "2/3  Constraints — any project context worth knowing? "
+        "(e.g. preferred stack, domain, working conditions)\n> ",
+    ),
+    (
+        "context",
+        "3/3  Context — who are you and what do you want from the agent?\n> ",
+    ),
+]
 
 
-def handle_memory_unload(args: list[str], agent: JarvisAgent) -> str:
-    if not args:
-        return "Usage: memory unload <name>"
-    if not agent.unload_memory(args[0]):
-        return f"Memory '{args[0]}' was not loaded."
-    return f"Memory '{args[0]}' unloaded."
+def run_onboarding(agent: JarvisAgent, *, forced: bool = False) -> str:
+    """Interactive onboarding interview that creates profile.md.
+
+    Skippable: typing 'skip' (or submitting nothing at the first question) writes
+    a minimal default profile. Re-runnable any time via `profile onboard`.
+    Returns a status line to print.
+    """
+    print("\nLet's set up your profile so answers fit you. "
+          "Type 'skip' at any point to use defaults.\n")
+    answers: dict[str, str] = {}
+    for i, (key, prompt) in enumerate(_ONBOARD_QUESTIONS):
+        try:
+            value = input(prompt).strip()
+        except EOFError:
+            value = ""
+        if value.lower() == "skip" or (i == 0 and value == ""):
+            agent.skip_onboarding()
+            return "Onboarding skipped — a default profile was created. Re-run with 'profile onboard'."
+        answers[key] = value
+    agent.onboard_profile(answers["style"], answers["constraints"], answers["context"])
+    return "Profile created. Refine the style anytime with 'personalize'."
 
 
-def handle_memory_write(args: list[str], agent: JarvisAgent) -> str:
-    if len(args) < 2:
-        return "Usage: memory write <name> <text>"
-    name = args[0]
-    agent.write_memory(name, " ".join(args[1:]) + "\n")
-    return f"Memory '{name}' written."
-
-
-def handle_memory_append(args: list[str], agent: JarvisAgent) -> str:
-    if len(args) < 2:
-        return "Usage: memory append <name> <text>"
-    name = args[0]
-    agent.append_memory(name, " ".join(args[1:]))
-    return f"Appended to memory '{name}'."
-
-
-def handle_memory_delete(args: list[str], agent: JarvisAgent) -> str:
-    if not args:
-        return "Usage: memory delete <name>"
-    if not agent.delete_memory(args[0]):
-        return f"Memory file not found: '{args[0]}'."
-    return f"Memory '{args[0]}' deleted."
+def handle_profile_onboard(agent: JarvisAgent) -> str:
+    return run_onboarding(agent, forced=True)
 
 
 # ── Profile personalisation ──────────────────────────────────────────────────
