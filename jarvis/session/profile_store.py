@@ -16,7 +16,6 @@ Constraints (soft project context), and Context (who the user is and why).
 import re
 from pathlib import Path
 
-_MEMORY_DIR = Path.home() / ".jarvis" / "memory"
 _FILENAME = "profile.md"
 
 # The only section the personaliser may rewrite. Constraints and Context are set
@@ -36,8 +35,9 @@ _DEFAULT = (
 
 
 class ProfileStore:
-    def __init__(self, directory: Path = _MEMORY_DIR) -> None:
-        self._path = directory / _FILENAME
+    def __init__(self, directory: Path | None = None) -> None:
+        # Resolve home at instantiation (not import) so $HOME-based test isolation works.
+        self._path = (directory or (Path.home() / ".jarvis" / "memory")) / _FILENAME
 
     def exists(self) -> bool:
         return self._path.exists()

@@ -27,6 +27,7 @@ from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
 from prompt_toolkit.key_binding.bindings.emacs import load_emacs_bindings
+from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout.containers import ConditionalContainer, Float, FloatContainer, HSplit, VSplit, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
@@ -41,7 +42,7 @@ COMMAND_TREE: dict[str, dict] = {
     "session": {"chat": {}, "summary": {}, "api": {}},
     "thread":  {"summary": {}, "load": {}, "new": {}, "clear": {}, "rename": {}, "delete": {}},
     "config":  {"show": {}, "set": {}, "update": {}, "reset": {}},
-    "task":    {"new": {}, "list": {}, "show": {}, "start": {}, "next": {}, "back": {}, "pause": {}, "delete": {}, "done": {}, "todo": {}},
+    "task":    {"new": {}, "list": {}, "show": {}, "start": {}, "run": {}, "exit": {}, "delete": {}},
     "invariants": {"show": {}, "init": {}},
     "profile": {"show": {}, "onboard": {}},
     "personalize": {},
@@ -52,9 +53,11 @@ COMMAND_TREE: dict[str, dict] = {
 MAX_SUGGESTIONS = 5
 SUGGESTION_COLOR = "#a1a9b7"
 
-# Input field grows as long text wraps, but never beyond this many rows; past it
-# the field stays fixed and scrolls internally.
+# The input line soft-wraps and grows up to this many visual rows.
 MAX_INPUT_ROWS = 5
+# A clipboard paste at or above this many characters is collapsed to a short
+# placeholder in the buffer (the real text is restored on submit).
+PASTE_COLLAPSE_THRESHOLD = 1000
 
 
 # ── Suggestion logic ──────────────────────────────────────────────────────────
@@ -141,8 +144,16 @@ class InputController:
       text        raw buffer content, stripped
     """
 
-    def __init__(self, status_fn: Callable[[], str] | None = None) -> None:
+    def __init__(
+        self,
+        status_fn: Callable[[], str] | None = None,
+        progress_fn: Callable[[], str] | None = None,
+        hint_fn: Callable[[], str] | None = None,
+    ) -> None:
         self._status_fn = status_fn
+        self._progress_fn = progress_fn
+        # Optional context-aware placeholder; overrides the default when non-empty.
+        self._hint_fn = hint_fn
 
         # ── Mode ──────────────────────────────────────────────────────────────
         self._mode: str = "prompt"  # "prompt" | "command"
@@ -160,6 +171,10 @@ class InputController:
 
         # ── Result communicated from Enter handler ────────────────────────────
         self._result: str = ""
+
+        # ── Collapsed clipboard pastes (placeholder text -> real text) ────────
+        self._pastes: dict[str, str] = {}
+        self._paste_seq: int = 0
 
         # ── Build Application ─────────────────────────────────────────────────
         self._buffer = Buffer(
@@ -199,27 +214,130 @@ class InputController:
 
             return self._mode, text
 
+    # ── Inline selection / single-line prompts (used by the task driver) ──────────
+
+    def select(self, title: str, options: list[str], default: int = 0) -> int | None:
+        """Show a vertical option list; ↑/↓ moves the arrow, Enter selects.
+
+        Returns the chosen index, or None if cancelled (Ctrl+C / Ctrl+D).
+        """
+        state = {"idx": max(0, min(default, len(options) - 1))}
+        kb = KeyBindings()
+
+        @kb.add("up", eager=True)
+        def _up(event) -> None:
+            state["idx"] = (state["idx"] - 1) % len(options)
+            event.app.invalidate()
+
+        @kb.add("down", eager=True)
+        def _down(event) -> None:
+            state["idx"] = (state["idx"] + 1) % len(options)
+            event.app.invalidate()
+
+        @kb.add("enter")
+        def _enter(event) -> None:
+            event.app.exit(result=state["idx"])
+
+        @kb.add("c-c")
+        @kb.add("c-d")
+        def _cancel(event) -> None:
+            event.app.exit(result=None)
+
+        def render() -> FormattedText:
+            items: list = [("class:select.title", title + "\n")]
+            for i, opt in enumerate(options):
+                active = i == state["idx"]
+                arrow = "→ " if active else "  "
+                cls = "class:select.active" if active else "class:select.option"
+                items.append((cls, f"{arrow}{opt}\n"))
+            return FormattedText(items)
+
+        app = Application(
+            layout=Layout(HSplit([Window(
+                content=FormattedTextControl(render),
+                dont_extend_height=True,
+                always_hide_cursor=True,  # don't park the cursor over the arrow glyph
+            )])),
+            key_bindings=kb,
+            style=Style.from_dict({
+                "select.title": "#8b9dc3 bold",
+                "select.option": "",
+                "select.active": "#e5c07b bold",
+            }),
+            full_screen=False,
+            erase_when_done=True,  # remove the arrow menu once a choice is made
+            mouse_support=False,
+        )
+        return app.run()
+
+    def read_text(self, label: str) -> str:
+        """Prompt for a single free-text line (e.g. 'What's the problem?'). Returns the text."""
+        buffer = Buffer(name="freetext", multiline=False)
+        kb = merge_key_bindings([self._freetext_bindings(buffer), load_emacs_bindings()])
+
+        prefix = Window(
+            content=FormattedTextControl(lambda: FormattedText([("class:freetext.label", label + " ")])),
+            dont_extend_width=True,
+            width=len(label) + 1,
+        )
+        field = Window(
+            content=BufferControl(buffer=buffer),
+            height=Dimension(min=1, max=MAX_INPUT_ROWS),
+            wrap_lines=True,
+            dont_extend_height=True,
+        )
+        app = Application(
+            layout=Layout(VSplit([prefix, field]), focused_element=buffer),
+            key_bindings=kb,
+            style=Style.from_dict({"freetext.label": "#8b9dc3 bold"}),
+            full_screen=False,
+            mouse_support=False,
+        )
+        result: dict = {}
+
+        def _run() -> str:
+            app.run()
+            return result.get("text", "")
+
+        # Stash the result via the binding closure.
+        self._freetext_result = result
+        return _run().strip()
+
+    def _freetext_bindings(self, buffer: Buffer) -> KeyBindings:
+        kb = KeyBindings()
+
+        @kb.add("enter")
+        def _enter(event) -> None:
+            self._freetext_result["text"] = buffer.text
+            event.app.exit()
+
+        @kb.add("c-c")
+        @kb.add("c-d")
+        def _cancel(event) -> None:
+            self._freetext_result["text"] = ""
+            event.app.exit()
+
+        return kb
+
     # ── Application construction ──────────────────────────────────────────────
 
     def _build_app(self) -> Application:
         has_suggestions = Condition(lambda: bool(self._suggestions))
 
-        prefix_window = Window(
-            content=FormattedTextControl(self._render_prefix),
-            width=2,
-            dont_extend_width=True,
-        )
-
         is_empty = Condition(lambda: self._buffer.text == "")
 
+        # The prompt glyph is rendered as a per-line prefix *inside* the buffer
+        # window (not a separate column), so prompt_toolkit accounts for its
+        # width in cursor positioning even when the input soft-wraps. Wrapped
+        # continuation rows are indented to align under the first character.
         input_window = FloatContainer(
             content=Window(
                 content=BufferControl(buffer=self._buffer),
-                # Wrap long input onto additional rows and grow the field to fit,
-                # instead of clamping to one row and scrolling horizontally.
-                # Capped at MAX_INPUT_ROWS rows; beyond that it scrolls internally.
+                # Soft-wrap long input and grow up to MAX_INPUT_ROWS rows;
+                # beyond that the window scrolls to keep the cursor visible.
                 height=Dimension(min=1, max=MAX_INPUT_ROWS),
                 wrap_lines=True,
+                get_line_prefix=self._line_prefix,
                 dont_extend_height=True,
             ),
             floats=[
@@ -231,7 +349,8 @@ class InputController:
                         ),
                         filter=is_empty,
                     ),
-                    left=0,
+                    # Offset past the "> " prefix on the first row.
+                    left=2,
                     top=0,
                 )
             ],
@@ -245,6 +364,15 @@ class InputController:
             filter=has_suggestions,
         )
 
+        has_progress = Condition(lambda: bool(self._progress_fn and self._progress_fn()))
+        progress_window = ConditionalContainer(
+            Window(
+                content=FormattedTextControl(self._render_progress),
+                dont_extend_height=True,
+            ),
+            filter=has_progress,
+        )
+
         containers = []
         if self._status_fn is not None:
             containers.append(
@@ -255,7 +383,8 @@ class InputController:
                 )
             )
         containers += [
-            VSplit([prefix_window, input_window]),
+            progress_window,
+            input_window,
             suggestions_window,
         ]
 
@@ -270,6 +399,10 @@ class InputController:
             "suggestion": SUGGESTION_COLOR,
             "hint": "#6b7280 italic",
             "status": "#8b9dc3",
+            "progress.header": "#8b9dc3 bold",
+            "progress.done": "#98c379",        # green
+            "progress.current": "#e5c07b bold",  # amber
+            "progress.pending": "#6b7280",      # grey
         })
 
         return Application(
@@ -292,17 +425,42 @@ class InputController:
         padded = text.ljust(width)
         return FormattedText([("class:status", padded)])
 
+    def _render_progress(self) -> FormattedText:
+        """Render the plan-progress panel, colouring each line by its status glyph."""
+        text = self._progress_fn() if self._progress_fn else ""
+        if not text:
+            return FormattedText([])
+        glyph_class = {
+            "✓": "class:progress.done",
+            "▶": "class:progress.current",
+            "○": "class:progress.pending",
+        }
+        items = []
+        for line in text.split("\n"):
+            cls = glyph_class.get(line.lstrip()[:1], "class:progress.header")
+            items.append((cls, line + "\n"))
+        return FormattedText(items)
+
     def _render_hint(self) -> FormattedText:
-        text = (
-            "Enter a request for the assistant..."
-            if self._mode == "prompt"
-            else "Enter a command..."
-        )
+        if self._mode == "command":
+            return FormattedText([("class:hint", "Enter a command...")])
+        # Prompt mode: a context-aware hint (e.g. an in-progress task) wins.
+        contextual = self._hint_fn() if self._hint_fn else ""
+        text = contextual or "Enter a request for the assistant..."
         return FormattedText([("class:hint", text)])
 
-    def _render_prefix(self) -> FormattedText:
-        glyph = ">" if self._mode == "prompt" else "!"
-        return FormattedText([("", glyph + " ")])
+    def _line_prefix(self, line_number: int, wrap_count: int) -> FormattedText:
+        """Per-line prefix for the input window.
+
+        The prompt glyph ("> " or "! ") is shown on the very first visual row.
+        Wrapped/continuation rows get no prefix, so long input does not pick up
+        stray leading spaces. Rendering this inside the window keeps the cursor
+        correct when the input wraps.
+        """
+        if line_number == 0 and wrap_count == 0:
+            glyph = ">" if self._mode == "prompt" else "!"
+            return FormattedText([("", glyph + " ")])
+        return FormattedText([("", "")])
 
     def _render_suggestions(self) -> FormattedText:
         items = []
@@ -331,19 +489,29 @@ class InputController:
 
         @kb.add("enter")
         def _enter(event) -> None:
-            text = self._buffer.text.strip()
-            if not text:
+            display = self._buffer.text.strip()
+            if not display:
                 return
+            # History keeps the compact (collapsed) form; the agent receives the
+            # expanded text with any collapsed pastes restored to their content.
             hist = self._prompt_hist if self._mode == "prompt" else self._command_hist
-            _add_history(hist, text)
-            self._result = text
-            # Drop the suggestion list so the final render erases those lines
-            # (the app does not erase its output on exit, so a leftover
-            # suggestions window would otherwise stay on screen).
+            _add_history(hist, display)
+            self._result = self._expand_pastes(self._buffer.text).strip()
+            # Clear the suggestion overlay so the accepted command's selection
+            # block does not linger above the printed output.
             self._suggestions = []
             self._suggestion_idx = 0
             event.app.invalidate()
             event.app.exit()
+
+        @kb.add(Keys.BracketedPaste)
+        def _paste(event) -> None:
+            data = event.data
+            if len(data) >= PASTE_COLLAPSE_THRESHOLD:
+                placeholder = self._register_paste(data)
+                self._buffer.insert_text(placeholder)
+            else:
+                self._buffer.insert_text(data)
 
         @kb.add("up", eager=True)
         def _up(event) -> None:
@@ -438,6 +606,25 @@ class InputController:
             raise EOFError
 
         return kb
+
+    # ── Clipboard paste collapsing ──────────────────────────────────────────────
+
+    def _register_paste(self, data: str) -> str:
+        """Store a large paste and return the placeholder shown in the buffer."""
+        self._paste_seq += 1
+        placeholder = f"[Pasted from clipboard: {len(data)} characters]"
+        # Disambiguate the rare case of two same-length pastes coexisting.
+        if placeholder in self._pastes and self._pastes[placeholder] != data:
+            placeholder = f"[Pasted from clipboard: {len(data)} characters (#{self._paste_seq})]"
+        self._pastes[placeholder] = data
+        return placeholder
+
+    def _expand_pastes(self, text: str) -> str:
+        """Replace any paste placeholders in text with their real content."""
+        for placeholder, real in self._pastes.items():
+            if placeholder in text:
+                text = text.replace(placeholder, real)
+        return text
 
     # ── Buffer event ──────────────────────────────────────────────────────────
 

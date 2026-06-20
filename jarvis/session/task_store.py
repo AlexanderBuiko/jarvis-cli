@@ -1,25 +1,29 @@
 """
 Working-memory task persistence.
 
-A task is the state of a piece of work that may span one or several threads.
-It lives independently of any thread as a JSON file under ~/.jarvis/tasks/<id>.json:
+A task is a standalone workspace — a piece of work with its own conversation,
+fully independent of chat threads. It lives as a JSON file under
+~/.jarvis/tasks/<id>.json:
   {
     "id":            "a1b2c3d4",
     "name":          "Prepare Android interview",
     "stage":         "execution",
+    "current_step":  "…",          # the step being worked within the current stage
+    "expected_action": "…",        # machine-readable next action (e.g. await_user, await_plan_approval)
+    "plan_steps":    ["…", …],     # the plan parsed into ordered, trackable steps
+    "step_index":    2,            # index of the in-progress step (steps before it are done)
     "description":   "…",
     "plan":          "…",
-    "completed":     ["…", …],
-    "remaining":     ["…", …],
     "notes":         "…",
     "stage_outputs": {"clarification": "…", "planning": "…"},
-    "thread_ids":    ["abcd1234", …],
+    "messages":      [{"role": "…", "content": "…"}, …],  # the task's own transcript
+    "result_path":   "…",          # file holding the final deliverable, set at done
     "created_at":    "2026-06-16T14:00:00",
     "updated_at":    "2026-06-16T14:30:00"
   }
 
-A thread references its active task via the "active_task_id" field in the thread
-file (see ThreadStore). The task file is the single source of truth for task state.
+The task file is the single source of truth for task state. Tasks are entered with
+`task start`/`task new` and left with `task exit`; chat threads never reference them.
 
 Stage transitions are enforced here in code (not in prompts) so that the rules
 survive summarisation and compaction.
@@ -30,24 +34,25 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-_TASKS_DIR = Path.home() / ".jarvis" / "tasks"
-
 # Task state machine. Basic stages; expand with caution.
 STAGES: tuple[str, ...] = ("clarification", "planning", "execution", "validation", "done")
 
 # Allowed forward (and revision) transitions. Anything not listed is rejected.
+# The first entry of each list is the default forward transition; later entries
+# are revision/branch targets that must be requested explicitly.
 ALLOWED_TRANSITIONS: dict[str, list[str]] = {
     "clarification": ["planning"],
     "planning":      ["execution"],
-    "execution":     ["validation"],
-    "validation":    ["done", "execution"],   # done, or back to execution for revision
+    "execution":     ["validation", "planning"],  # validate, or back to planning to revise the plan
+    "validation":    ["done", "execution"],        # done, or back to execution for revision
     "done":          [],
 }
 
 
 class TaskStore:
-    def __init__(self, directory: Path = _TASKS_DIR) -> None:
-        self._dir = directory
+    def __init__(self, directory: Path | None = None) -> None:
+        # Resolve home at instantiation (not import) so $HOME-based test isolation works.
+        self._dir = directory or (Path.home() / ".jarvis" / "tasks")
 
     # ── Core operations ────────────────────────────────────────────────────────
 
@@ -59,13 +64,16 @@ class TaskStore:
             "id": task_id,
             "name": name or task_id,
             "stage": "clarification",
+            "current_step": "",
+            "expected_action": "",
+            "plan_steps": [],
+            "step_index": 0,
+            "result_path": "",
             "description": "",
             "plan": "",
-            "completed": [],
-            "remaining": [],
             "notes": "",
             "stage_outputs": {},
-            "thread_ids": [],
+            "messages": [],
             "created_at": now,
             "updated_at": now,
         }
@@ -112,6 +120,16 @@ class TaskStore:
             return True
         return False
 
+    def save_result(self, task: dict, text: str) -> Path:
+        """Write the task's final deliverable to the results/ subdirectory and record its path."""
+        results_dir = self._dir / "results"
+        results_dir.mkdir(parents=True, exist_ok=True)
+        path = results_dir / f"{task['id']}.md"
+        path.write_text(text, encoding="utf-8")
+        task["result_path"] = str(path)
+        self.save(task)
+        return path
+
     def advance_stage(self, task: dict, target: str | None = None) -> str:
         """Move the task to the next stage, enforcing ALLOWED_TRANSITIONS in code.
 
@@ -131,6 +149,12 @@ class TaskStore:
                 f"(allowed: {', '.join(allowed)})"
             )
         task["stage"] = target
+        # current_step belongs to a stage; clear it so the new stage starts fresh.
+        task["current_step"] = ""
+        # Entering execution (forward, or back from validation for rework) starts
+        # step-wise progress from the first plan step.
+        if target == "execution":
+            task["step_index"] = 0
         self.save(task)
         return target
 
@@ -155,13 +179,16 @@ class TaskStore:
         data.setdefault("id", path.stem)
         data.setdefault("name", data["id"])
         data.setdefault("stage", "clarification")
+        data.setdefault("current_step", "")
+        data.setdefault("expected_action", "")
+        data.setdefault("plan_steps", [])
+        data.setdefault("step_index", 0)
+        data.setdefault("result_path", "")
         data.setdefault("description", "")
         data.setdefault("plan", "")
-        data.setdefault("completed", [])
-        data.setdefault("remaining", [])
         data.setdefault("notes", "")
         data.setdefault("stage_outputs", {})
-        data.setdefault("thread_ids", [])
+        data.setdefault("messages", [])
         return data
 
 

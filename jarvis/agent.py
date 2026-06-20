@@ -6,7 +6,12 @@ The REPL and any other interface interact with Jarvis exclusively through this c
 """
 
 from .config.manager import ConfigManager
-from .openrouter.client import DEFAULT_MODEL, OpenRouterClient, Completion
+from .openrouter.client import Completion
+from .llm.engine import LLMEngine
+from .llm.accounting import make_call_record as _make_call_record
+from .pipeline.invariants import InvariantChecker
+from .pipeline.orchestrator import Orchestrator
+from .pipeline.stages import STAGE_AGENTS
 from .prompt_builder.builder import (
     build_system_prompt,
     build_strategy_prompt,
@@ -15,8 +20,6 @@ from .prompt_builder.builder import (
     build_summary_prompt,
     build_facts_extraction_prompt,
     build_topic_routing_prompt,
-    build_invariant_check_prompt,
-    build_invariant_resolution_prompt,
     build_profile_style_prompt,
     _PROFILE_NO_CHANGE,
 )
@@ -47,17 +50,6 @@ _PROFILE_NUDGE_INTERVAL: int = 5
 # How many of the most recent behaviour-log notes the personaliser learns from.
 _PERSONALIZE_WINDOW: int = 100
 
-# Opening instruction generated when the user advances into a stage (`task next`),
-# so the new stage's work appears immediately without a separate user message.
-_STAGE_ENTRY_PROMPTS: dict[str, str] = {
-    "planning": "I'm ready to plan. Please produce the plan for this task.",
-    "execution": "The plan is approved. Let's begin execution — present the first step.",
-    "validation": "Execution is complete. Let's validate the result against the success criteria.",
-    "done": "The task is finished. Please give a brief closing summary.",
-}
-# Opening instruction for `task back` (validation → execution).
-_BACK_ENTRY_PROMPT: str = "Let's return to execution and keep working."
-
 
 class JarvisAgent:
     """
@@ -81,12 +73,14 @@ class JarvisAgent:
       topics        — automatic topic routing; context is scoped to the active topic
     """
 
-    def __init__(self, client: OpenRouterClient, config_manager: ConfigManager) -> None:
+    def __init__(self, client: LLMEngine, config_manager: ConfigManager) -> None:
         self._client = client
         self._config = config_manager
+        self._invariant_checker = InvariantChecker(client)
         self._threads = ThreadStore()
         self._threads.migrate_legacy()
         self._tasks = TaskStore()
+        self._orchestrator = Orchestrator(STAGE_AGENTS, self._tasks)
         self._profile = ProfileStore()
         self._invariants = InvariantStore()
         self._behavior = BehaviorLog()
@@ -121,15 +115,65 @@ class JarvisAgent:
         self._last_context_tokens: int = 0
 
         self._session = SessionStore()
-        self._load_active_task()
+        # Tasks are standalone workspaces entered via `task start`/`task new`; they
+        # are not tied to threads, so the session starts in chat mode (no task).
 
     # ── Public API ────────────────────────────────────────────────────────────
 
     def chat(self, user_input: str) -> str:
-        """Send a message and return the assistant's response.
+        """Send a message and return the assistant's response (with any notices)."""
+        response_text, notices = self._run_turn(user_input)
+        return "\n\n".join([response_text] + notices)
 
-        Builds the full message list as [system] + history + [current turn],
-        then appends both the user turn and assistant response to history.
+    def run_stage_turn(self, entry_message: str, extra_system: str = "") -> str:
+        """Run one pipeline turn against the ENTERED TASK's own conversation.
+
+        A task is a standalone workspace: its turns read and append to the task's
+        own message history (stored on the task file), never the chat thread. This
+        keeps tasks and free chat as two separate surfaces. Returns the raw
+        assistant text (control markers intact) for the orchestrator to parse.
+        """
+        task = self._active_task
+        if task is None:
+            return ""
+        params = self._config.runtime
+        profile, invariants = self._always_on_memory()
+
+        system_prompt = build_system_prompt(params, task, profile, invariants)
+        if extra_system:
+            system_prompt = f"{system_prompt}\n\n{extra_system}"
+
+        # system + working-memory (task state) + the task's own history + this turn.
+        history = task.setdefault("messages", [])
+        messages = (
+            [{"role": "system", "content": system_prompt}]
+            + build_working_memory_block(task)
+            + list(history)
+            + [{"role": "user", "content": entry_message}]
+        )
+
+        api_calls: list[dict] = []
+        completion = self._client.complete(messages, params)
+        response_text = completion.text.strip()
+        api_calls.append(_make_call_record(1, "stage_turn", completion, self._client))
+
+        if invariants:
+            response_text, _notice, completion = self._invariant_checker.validate(
+                invariants, messages, response_text, completion, params, api_calls
+            )
+
+        # Persist the turn on the task's own transcript.
+        history.append({"role": "user", "content": entry_message})
+        history.append({"role": "assistant", "content": response_text})
+        self._tasks.save(task)
+        return response_text
+
+    def _run_turn(self, user_input: str, *, extra_system: str | None = None) -> tuple[str, list[str]]:
+        """Core request/response cycle. Returns (response_text, notices).
+
+        Builds the full message list as [system] + working-memory + history +
+        [current turn], runs the completion (+ invariant check), appends the
+        turn to history, runs context-strategy background work, and persists.
         """
         params = self._config.runtime
         strategy = params.get("context_strategy", "none")
@@ -143,6 +187,10 @@ class JarvisAgent:
         system_prompt = build_system_prompt(
             params, self._active_task, profile, invariants
         )
+        # Orchestrator-driven stage runs add their marker protocol here, so it is
+        # present only on autorun and never pollutes free-form chat replies.
+        if extra_system:
+            system_prompt = f"{system_prompt}\n\n{extra_system}"
 
         if params.get("solution_strategy") == "prompt_generation":
             # Two-stage pipeline: stage 1 generates an optimised prompt for the
@@ -185,7 +233,7 @@ class JarvisAgent:
         # defined, check the reply in code and rework it once on a violation.
         invariant_notice: str | None = None
         if invariants:
-            response_text, invariant_notice, completion = self._validate_invariants(
+            response_text, invariant_notice, completion = self._invariant_checker.validate(
                 invariants, messages, response_text, completion, params, api_calls
             )
 
@@ -254,14 +302,8 @@ class JarvisAgent:
             generated_prompt=generated_prompt,
         )
 
-        parts = [response_text]
-        if invariant_notice:
-            parts.append(invariant_notice)
-        if extra_notice:
-            parts.append(extra_notice)
-        if profile_notice:
-            parts.append(profile_notice)
-        return "\n\n".join(parts)
+        notices = [n for n in (invariant_notice, extra_notice, profile_notice) if n]
+        return response_text, notices
 
     def reset_history(self) -> None:
         """Clear the active thread's messages (thread record is preserved)."""
@@ -288,7 +330,6 @@ class JarvisAgent:
         self._summary_covered_turns = 0
         self._facts = None
         self._topic_summaries = {}
-        self._load_active_task()
         return self._thread_name
 
     def load_thread(self, query: str) -> bool:
@@ -313,7 +354,6 @@ class JarvisAgent:
             self._summary, self._summary_covered_turns,
             self._facts, self._topic_summaries,
         )
-        self._load_active_task()
         return True
 
     def delete_thread(self, query: str) -> str:
@@ -345,7 +385,6 @@ class JarvisAgent:
                     self._summary, self._summary_covered_turns,
                     self._facts, self._topic_summaries,
                 )
-                self._load_active_task()
                 return (
                     f"Thread '{target_name}' deleted. "
                     f"Switched to '{self._thread_name}'."
@@ -361,7 +400,6 @@ class JarvisAgent:
                 self._summary_covered_turns = 0
                 self._facts = None
                 self._topic_summaries = {}
-                self._load_active_task()
                 return (
                     f"Thread '{target_name}' deleted. "
                     f"Started new thread '{self._thread_name}'."
@@ -444,111 +482,74 @@ class JarvisAgent:
 
     @property
     def active_task(self) -> dict | None:
-        """The working-memory task linked to the active thread, or None."""
+        """The task workspace currently entered (independent of threads), or None."""
         return dict(self._active_task) if self._active_task else None
 
     def create_task(self, name: str | None = None) -> dict:
-        """Create a task, link it to the active thread, and make it active."""
+        """Create a standalone task workspace and enter it."""
         task = self._tasks.new_task(name)
-        task["thread_ids"] = [self._thread_id]
-        self._tasks.save(task)
-        self._threads.set_active_task(self._thread_id, task["id"])
         self._active_task = task
         return task
 
     def start_task(self, query: str) -> dict | None:
-        """Link an existing task to the active thread and make it active."""
+        """Enter an existing task workspace (independent of the current thread)."""
         task = self._tasks.find(query)
         if task is None:
             return None
-        if self._thread_id not in task["thread_ids"]:
-            task["thread_ids"].append(self._thread_id)
-            self._tasks.save(task)
-        self._threads.set_active_task(self._thread_id, task["id"])
         self._active_task = task
         return task
 
-    def pause_task(self) -> str | None:
-        """Unlink the active task from the thread (the task file is preserved)."""
+    def exit_task(self) -> str | None:
+        """Leave the current task workspace, returning to chat. The task is preserved."""
         if self._active_task is None:
             return None
         name = self._active_task["name"]
-        self._threads.set_active_task(self._thread_id, None)
         self._active_task = None
         return name
 
     def delete_task(self, query: str) -> str | None:
-        """Delete a task file. Unlinks it from the active thread if it was active."""
+        """Delete a task file. Leaves it if it is the one currently entered."""
         task = self._tasks.find(query)
         if task is None:
             return None
         self._tasks.delete(task["id"])
         if self._active_task and self._active_task["id"] == task["id"]:
-            self._threads.set_active_task(self._thread_id, None)
             self._active_task = None
         return task["name"]
 
     def list_tasks(self) -> list[dict]:
         return self._tasks.list_all()
 
-    def next_stage(self) -> tuple[str | None, str]:
-        """Advance the active task to the next forward stage and continue.
+    def pipeline_step(self, extra_instruction: str = ""):
+        """Run one turn of the active task's pipeline via the orchestrator.
 
-        Deterministic, user-driven (`task next`). Records the leaving stage's
-        result, advances in code (ALLOWED_TRANSITIONS enforced), then generates
-        the new stage's opening reply. Returns (new_stage, reply_or_error).
+        Returns a StageResult (or None when there is no active task). The
+        interactive driver loops this, handling gates (questions and Confirm/
+        Reject approvals) between calls. extra_instruction carries a user's
+        answer or rework feedback into the next turn's entry message.
         """
-        return self._move_stage(None)
-
-    def back_stage(self) -> tuple[str | None, str]:
-        """Return a validation task to execution and continue (`task back`)."""
-        return self._move_stage("execution")
-
-    def _move_stage(self, target: str | None) -> tuple[str | None, str]:
         if self._active_task is None:
-            return None, "No active task."
-        current = self._active_task["stage"]
-        # Record the leaving stage's result (last assistant message), and promote
-        # the key results into the canonical task fields so they appear in
-        # `task show` and carry to other threads — no extra LLM call needed.
-        last_asst = next(
-            (m["content"] for m in reversed(self._history) if m["role"] == "assistant"),
-            None,
-        )
-        if last_asst:
-            self._active_task.setdefault("stage_outputs", {})[current] = last_asst
-            if current == "clarification" and not self._active_task.get("description"):
-                self._active_task["description"] = last_asst
-            elif current == "planning":
-                self._active_task["plan"] = last_asst
-        try:
-            new_stage = self._tasks.advance_stage(self._active_task, target)
-        except ValueError as exc:
-            return None, f"Cannot move: {exc}."
-        # Generate the new stage's opening reply in the same step (advance + continue).
-        entry = _BACK_ENTRY_PROMPT if target == "execution" else _STAGE_ENTRY_PROMPTS.get(new_stage, "Continue.")
-        reply = self.chat(entry)
-        return new_stage, reply
+            return None
+        return self._orchestrator.step(self._active_task, self.run_stage_turn, extra_instruction)
 
-    def add_completed(self, item: str) -> bool:
-        """Record a completed item on the active task. Returns False if no task."""
+    def save_task_result(self, text: str):
+        """Persist the active task's final deliverable to a file artifact. Returns the path."""
         if self._active_task is None:
-            return False
-        self._active_task.setdefault("completed", []).append(item)
-        # Drop a matching remaining item if present.
-        self._active_task["remaining"] = [
-            r for r in self._active_task.get("remaining", []) if r != item
-        ]
-        self._tasks.save(self._active_task)
-        return True
+            return None
+        return self._tasks.save_result(self._active_task, text)
 
-    def add_remaining(self, item: str) -> bool:
-        """Record a pending item on the active task. Returns False if no task."""
+    def advance_to(self, target: str) -> str | None:
+        """Move the active task to target (code-enforced). A no-op if already there.
+
+        Used by the driver to apply an approval decision: Confirm advances to the
+        gate's confirm_target; Reject moves to its reject_target (which may be the
+        current stage, i.e. rework in place).
+        """
         if self._active_task is None:
-            return False
-        self._active_task.setdefault("remaining", []).append(item)
-        self._tasks.save(self._active_task)
-        return True
+            return None
+        if self._active_task["stage"] == target:
+            return target  # rework in place — stay in the stage
+        return self._tasks.advance_stage(self._active_task, target)
 
     # ── Invariants (single global hard-rule file) ───────────────────────────────
 
@@ -635,50 +636,9 @@ class JarvisAgent:
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
-    def _load_active_task(self) -> None:
-        """Load the working-memory task linked to the active thread, if any."""
-        task_id = self._threads.get_active_task_id(self._thread_id)
-        self._active_task = self._tasks.load(task_id) if task_id else None
-
-    def _validate_invariants(
-        self,
-        invariants: str,
-        messages: list[dict],
-        response_text: str,
-        completion: "Completion",
-        params: dict,
-        api_calls: list[dict],
-    ) -> tuple[str, str | None, "Completion"]:
-        """Check the reply against the invariants in code; resolve once on violation.
-
-        On a violation the reply is regenerated to either (a) correct accidental
-        drift while staying compliant, or (b) refuse the request and explain the
-        conflict when it cannot be satisfied without breaking an invariant.
-
-        Returns (final_text, notice_or_None, completion_for_finish_reason).
-        """
-        check_prompt = build_invariant_check_prompt(invariants, response_text)
-        check_params = {"model": params["model"]} if "model" in params else {}
-        check = self._client.complete([{"role": "user", "content": check_prompt}], check_params)
-        api_calls.append(_make_call_record(len(api_calls) + 1, "invariant_check", check, self._client))
-
-        if _invariants_ok(check.text):
-            return response_text, None, completion
-
-        resolution_prompt = build_invariant_resolution_prompt(
-            invariants, response_text, check.text.strip()
-        )
-        resolution_messages = messages + [
-            {"role": "assistant", "content": response_text},
-            {"role": "user", "content": resolution_prompt},
-        ]
-        resolution = self._client.complete(resolution_messages, params)
-        api_calls.append(_make_call_record(len(api_calls) + 1, "invariant_resolution", resolution, self._client))
-        notice = (
-            "[Invariant check: your request conflicted with the configured invariants — "
-            "the reply above was adjusted or declined to respect them.]"
-        )
-        return resolution.text.strip(), notice, resolution
+    def _always_on_memory(self) -> tuple[str | None, str | None]:
+        """Return (profile, invariants) from the always-on stores (injected every turn)."""
+        return self._profile.read_active(), self._invariants.read_active()
 
     def _build_context(self, active_topic: str | None = None) -> list[dict]:
         """Return the message list to include in the next API request.
@@ -864,79 +824,3 @@ class JarvisAgent:
         return _make_call_record(0, "topic_summary_update", completion, self._client)
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-
-def _invariants_ok(verdict: str) -> bool:
-    """True when the invariant checker reported no violations.
-
-    The checker is told to answer exactly "OK" when compliant; anything else is
-    treated as a violation list.
-    """
-    v = verdict.strip()
-    if not v:
-        return True
-    return v.splitlines()[0].strip().upper().startswith("OK")
-
-
-def _make_call_record(
-    index: int,
-    label: str,
-    completion: Completion,
-    client: "OpenRouterClient",
-) -> dict:
-    """Build a single API call record for the session log.
-
-    Cost is computed here using the client's cached pricing data so that each
-    record is self-contained. If pricing is unavailable all cost fields are None.
-    """
-    raw = completion.response
-    usage = raw.get("usage") or {}
-
-    # Pricing lookup uses the requested model ID (canonical, present in the
-    # catalog). Falls back to the actual model reported in the response, which
-    # may be a versioned variant (e.g. "qwen/qwen3-32b-04-28").
-    requested_model: str = completion.request.get("model") or DEFAULT_MODEL
-    actual_model: str = raw.get("model") or requested_model
-
-    input_per_m, output_per_m = client.get_pricing(requested_model)
-    if input_per_m is None and actual_model != requested_model:
-        input_per_m, output_per_m = client.get_pricing(actual_model)
-
-    prompt_tokens: int | None = usage.get("prompt_tokens")
-    completion_tokens: int | None = usage.get("completion_tokens")
-
-    input_cost: float | None = (
-        (prompt_tokens / 1_000_000) * input_per_m
-        if prompt_tokens is not None and input_per_m is not None
-        else None
-    )
-    output_cost: float | None = (
-        (completion_tokens / 1_000_000) * output_per_m
-        if completion_tokens is not None and output_per_m is not None
-        else None
-    )
-    total_cost: float | None = (
-        input_cost + output_cost
-        if input_cost is not None and output_cost is not None
-        else None
-    )
-
-    return {
-        "index": index,
-        "label": label,
-        "latency_ms": completion.latency_ms,
-        "request": completion.request,
-        "response": {
-            "content": completion.text,
-            "finish_reason": completion.finish_reason,
-            "usage": usage or None,
-            "model": actual_model,
-            "id": raw.get("id"),
-        },
-        "cost": {
-            "input_usd": input_cost,
-            "output_usd": output_cost,
-            "total_usd": total_cost,
-        },
-    }

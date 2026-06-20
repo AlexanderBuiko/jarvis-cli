@@ -14,7 +14,6 @@ refused with an explanation rather than quietly honoured.
 
 from pathlib import Path
 
-_MEMORY_DIR = Path.home() / ".jarvis" / "memory"
 _FILENAME = "invariants.md"
 
 _TEMPLATE = (
@@ -28,8 +27,9 @@ _TEMPLATE = (
 class InvariantStore:
     """Single global invariants.md file. No per-thread or per-task scope."""
 
-    def __init__(self, directory: Path = _MEMORY_DIR) -> None:
-        self._path = directory / _FILENAME
+    def __init__(self, directory: Path | None = None) -> None:
+        # Resolve home at instantiation (not import) so $HOME-based test isolation works.
+        self._path = (directory or (Path.home() / ".jarvis" / "memory")) / _FILENAME
 
     def read(self) -> str | None:
         """Return the invariants text, or None if the file is absent."""

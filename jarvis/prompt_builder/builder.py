@@ -29,44 +29,14 @@ _EXPERT_PANEL_INSTRUCTION = (
 )
 
 
-# Stage transitions are controlled explicitly by the user via `task next` /
-# `task back`; the agent only does the work of the current stage and never moves
-# stages itself (deterministic, code-enforced control). Each stage describes its
-# job and tells the user how to proceed when they are ready.
-_TASK_STAGE_INSTRUCTIONS: dict[str, str] = {
-    "clarification": (
-        "The active task is in the CLARIFICATION stage. Make sure the goal, success criteria, "
-        "scope, and constraints are clear. Ask clarifying questions ONLY about details that are "
-        "genuinely missing or ambiguous — do not ask about things the user already specified or "
-        "that have a sensible default. When you believe you understand the task, briefly restate "
-        "your understanding and tell the user to run `task next` when they are ready to plan."
-    ),
-    "planning": (
-        "The active task is in the PLANNING stage. Produce a concrete, ordered plan that would "
-        "complete the task. Present the plan and invite the user to adjust it; tell them to run "
-        "`task next` when they approve it and want to start execution."
-    ),
-    "execution": (
-        "The active task is in the EXECUTION stage. Carry out the plan: present the work (e.g. the "
-        "problems to solve) and respond to the user's results as they come. When the planned work "
-        "is finished, tell the user to run `task next` to move to validation."
-    ),
-    "validation": (
-        "The active task is in the VALIDATION stage. Verify the result against the plan and the "
-        "success criteria. If the criteria are met, tell the user to run `task next` to finish the "
-        "task. If they are not met, explain what is wrong and tell the user to run `task back` to "
-        "return to execution."
-    ),
-    "done": (
-        "The active task is DONE. Provide a brief closing summary if useful."
-    ),
-}
-
+# The orchestrator drives stage transitions in code; the agent only does the work
+# of the current stage. Each stage's role lives on its StageAgent
+# (jarvis/pipeline/stages.py) as the single source — build_system_prompt reads it
+# from the registry so the chat path and the orchestrator never drift apart.
 _TASK_CONTROL_NOTE = (
-    "Stage control: you must NOT change the task stage yourself and must not claim a stage is "
-    "switched. Stage transitions happen only when the user runs `task next` (forward) or "
-    "`task back` (validation → execution). Just do the current stage's work and, when ready, tell "
-    "the user which command to run."
+    "Stage control: do only the current stage's work. You must NOT change the stage yourself, "
+    "claim a stage has switched, or tell the user to run any command — stage transitions are "
+    "handled for you."
 )
 
 
@@ -104,8 +74,12 @@ def build_system_prompt(
         )
 
     if task is not None:
+        # Import here to avoid a module-load cycle (stages -> base; builder is
+        # imported widely). The fragment is the stage role's single source.
+        from ..pipeline.stages import stage_system_fragment
+
         stage = task.get("stage", "clarification")
-        stage_instruction = _TASK_STAGE_INSTRUCTIONS.get(stage)
+        stage_instruction = stage_system_fragment(stage, task)
         if stage_instruction:
             parts.append(stage_instruction)
         if stage != "done":
@@ -114,45 +88,77 @@ def build_system_prompt(
     return "\n\n".join(parts)
 
 
+_STAGE_ORDER: tuple[str, ...] = ("clarification", "planning", "execution", "validation", "done")
+
+
 def build_working_memory_block(task: dict[str, Any]) -> list[dict]:
     """Return a pseudo-exchange describing the current task state.
 
     Injected ahead of the conversation history so the model always sees the
     task's stage, plan, and progress without the user repeating it. Lives
     outside the message history, so it survives compression and thread switches.
+
+    Stage-scoped on purpose: the tutor's anti-pattern is "include everything saved
+    in every prompt." So instead of dumping every stage's full output every turn,
+    we carry the durable essentials (plan, current step, progress) plus only the
+    *immediately preceding* stage's result — enough to resume without re-explaining,
+    without unbounded context growth as the task progresses.
     """
     lines = [
         f"[Working Memory — Task: {task.get('name', '')}]",
         f"Stage: {task.get('stage', '')}",
     ]
+    if task.get("current_step"):
+        lines.append(f"Current step: {task['current_step']}")
+    if task.get("expected_action"):
+        lines.append(f"Expected action: {task['expected_action']}")
     if task.get("description"):
         lines.append(f"Description: {task['description']}")
     if task.get("plan"):
         lines.append("Plan:")
         lines.append(task["plan"])
-    if task.get("completed"):
-        lines.append("Completed:")
-        lines += [f"  - {item}" for item in task["completed"]]
-    if task.get("remaining"):
-        lines.append("Remaining:")
-        lines += [f"  - {item}" for item in task["remaining"]]
     if task.get("notes"):
         lines.append(f"Notes: {task['notes']}")
 
-    # Results recorded as each stage completed. This is the durable task context
-    # that lets work resume in a different thread (where the chat history is gone).
+    # Only the immediately preceding stage's result — the durable hand-off that
+    # lets work resume in a different thread (where the chat history is gone)
+    # without re-dumping the whole task history every turn.
+    prev_output = _preceding_stage_output(task)
+    if prev_output:
+        prev_stage, text = prev_output
+        lines.append(f"Result from the previous stage [{prev_stage}]:")
+        lines += [f"  {ln}" for ln in text.splitlines()]
+
+    # The done stage assembles the deliverable, so it also needs the full execution
+    # log (the actual work) even when that is not the immediately preceding stage.
     outputs = task.get("stage_outputs") or {}
-    ordered = [s for s in ("clarification", "planning", "execution", "validation") if s in outputs]
-    if ordered:
-        lines.append("Results from completed stages:")
-        for stage in ordered:
-            lines.append(f"  [{stage}]")
-            lines += [f"    {ln}" for ln in outputs[stage].splitlines()]
+    if task.get("stage") == "done" and outputs.get("execution") and (
+        not prev_output or prev_output[0] != "execution"
+    ):
+        lines.append("Execution work to assemble into the deliverable:")
+        lines += [f"  {ln}" for ln in outputs["execution"].splitlines()]
 
     return [
         {"role": "user", "content": "\n".join(lines)},
         {"role": "assistant", "content": "Understood, I have the current task context."},
     ]
+
+
+def _preceding_stage_output(task: dict[str, Any]) -> tuple[str, str] | None:
+    """Return (stage, output) for the most recent completed stage before the current one."""
+    outputs = task.get("stage_outputs") or {}
+    if not outputs:
+        return None
+    stage = task.get("stage", "clarification")
+    try:
+        idx = _STAGE_ORDER.index(stage)
+    except ValueError:
+        idx = len(_STAGE_ORDER)
+    # Walk backwards from the stage just before the current one.
+    for prev in reversed(_STAGE_ORDER[:idx]):
+        if outputs.get(prev):
+            return prev, outputs[prev]
+    return None
 
 
 def build_strategy_prompt(params: dict[str, Any], user_request: str) -> str:

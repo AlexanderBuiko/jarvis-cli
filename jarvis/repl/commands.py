@@ -53,18 +53,29 @@ Commands
   session api                   Show raw API request/response payloads
 
   task                          Show the active task (working memory)
-  task new [name]               Create a task and link it to this thread
+  task new [name]               Create a task workspace and enter it
   task list                     List all saved tasks and their stages
-  task start <name-or-id>       Resume an existing task in this thread
-  task next                     Advance to the next stage and continue (you control transitions)
-  task back                     Return validation → execution
-  task pause                    Unlink the active task (state preserved)
+  task start <name-or-id>       Enter an existing task workspace
+  task run                      Continue the entered task with no new input
+  task exit                     Leave the task, back to chat (state preserved)
   task delete <name-or-id>      Permanently delete a task
-  task done <item>              Record a completed item on the active task
-  task todo <item>              Record a remaining item on the active task
 
-  Stages: clarification → planning → execution → validation → done.
-  The agent never changes stage itself; you advance with 'task next' / 'task back'.
+  Tasks and chat are two separate surfaces. Threads ('thread …') are pure
+  conversation. A task is a standalone workspace with its own context: 'task start'
+  (or 'task new') enters it, 'task exit' leaves. While inside a task your messages
+  drive its pipeline; outside, they're normal chat.
+
+  Stages: clarification → planning → execution → validation → done (enforced in code).
+  Inside a task your next message drives it, and 'task run' continues with no new
+  input. The pipeline pauses only when it needs you:
+    • a free-text question (clarification, or an execution step needing input), or
+    • a Confirm / Reject choice at the two critical gates — plan approval and the
+      final done decision (↑/↓ to move the arrow, Enter to choose). Reject asks
+      "What's the problem?" and reworks with your feedback.
+  Execution runs step-by-step under a live step table; press Ctrl+C to stop (the
+  last completed step is saved — 'task run' resumes from it). At done, a short
+  summary is shown and the full deliverable is saved to a result file (its path is
+  shown and also in 'task show').
 
   invariants                    Show the global invariants (hard rules)
   invariants init               Scaffold invariants.md from a template
@@ -89,6 +100,7 @@ Commands
 Parameters
 ──────────
   model              str    OpenRouter model identifier
+                            Can only be changed on an empty thread.
   temperature        float  0.0 – 2.0   Sampling temperature
   top_p              float  0.0 – 1.0   Nucleus sampling probability
   top_k              int                Top-k sampling cutoff
@@ -154,7 +166,7 @@ def handle_thread_show(agent: JarvisAgent) -> str:
     turn_count = len(history) // 2
     tok = agent.thread_total_tokens
     cost = agent.thread_total_cost
-    tok_str = f"{tok:,} tok" if tok else "0 tok"
+    tok_str = f"{tok:,} tokens" if tok else "0 tokens"
     cost_str = f"  ${cost:.6f}" if cost else ""
     lines = [f"Conversation context ({turn_count} turn(s))  —  {tok_str}{cost_str}", ""]
     sep = "·" * 40
@@ -190,7 +202,7 @@ def handle_thread_load(args: list[str], agent: JarvisAgent) -> str:
             active_marker = " ←" if t["id"] == agent.thread_id else ""
             tok = t.get("total_tokens") or 0
             cost = t.get("total_cost") or 0.0
-            tok_str = f"{tok:>8,} tok" if tok else "       — tok"
+            tok_str = f"{tok:>8,} tokens" if tok else "       — tokens"
             cost_str = f"  ${cost:.6f}" if cost else ""
             lines.append(
                 f"  {t['name']:<20}  {t['id']}  {t['turns']:>3} turn(s)  {tok_str}{cost_str}{active_marker}"
@@ -254,7 +266,7 @@ def handle_thread_summary(
             if len(entry) > 3 and entry[3] is not None
         ]
         if ctx_series:
-            ctx_heading = f"Context Utilisation  (context window: {context_window:,} tok)"
+            ctx_heading = f"Context Utilisation  (context window: {context_window:,} tokens)"
             lines += [sep, ctx_heading, sep, ""]
             lines.append(f"  {'Turn':>4}  {'Context Tokens':>15}  {'Context':>8}")
             lines.append(f"  {'────':>4}  {'──────────────':>15}  {'───────':>8}")
@@ -339,6 +351,25 @@ def handle_thread_summary(
 # ── Working memory (tasks) ──────────────────────────────────────────────────
 
 
+def render_plan_progress(task: dict) -> str | None:
+    """Render the plan as a step table with per-step status, or None if no steps.
+
+    ✓ completed   ▶ in-progress   ○ pending. The status glyph is the first
+    non-space character on each row, which the live input-panel uses to colour it.
+    """
+    steps = task.get("plan_steps") or []
+    if not steps:
+        return None
+    idx = task.get("step_index", 0)
+    done = min(idx, len(steps))
+    lines = [f"Steps ({done}/{len(steps)} done)"]
+    width = len(str(len(steps)))
+    for i, step in enumerate(steps):
+        glyph = "✓" if i < idx else ("▶" if i == idx else "○")
+        lines.append(f"  {glyph}  {str(i + 1).rjust(width)}. {step}")
+    return "\n".join(lines)
+
+
 def _format_task(task: dict) -> str:
     sep = "─" * 60
     lines = [
@@ -348,19 +379,24 @@ def _format_task(task: dict) -> str:
         f"  Id:      {task.get('id', '')}",
         f"  Stage:   {task.get('stage', '')}",
     ]
-    if task.get("description"):
-        lines.append(f"  Goal:    {task['description']}")
-    if task.get("plan"):
-        lines += ["", "  Plan:"]
-        lines += [f"    {ln}" for ln in task["plan"].splitlines()]
-    if task.get("completed"):
-        lines += ["", "  Completed:"]
-        lines += [f"    - {item}" for item in task["completed"]]
-    if task.get("remaining"):
-        lines += ["", "  Remaining:"]
-        lines += [f"    - {item}" for item in task["remaining"]]
+    if task.get("current_step"):
+        lines.append(f"  Step:    {task['current_step']}")
+    if task.get("expected_action"):
+        lines.append(f"  Next:    {task['expected_action']}")
+
+    # Progress checklist (plan steps with status). The plan itself lives in the
+    # stage results below, so we don't repeat it here.
+    progress = render_plan_progress(task)
+    if progress:
+        lines += [""]
+        lines += [f"  {ln}" for ln in progress.splitlines()]
+
     if task.get("notes"):
         lines += ["", f"  Notes:   {task['notes']}"]
+
+    # Stage results are the single source for each stage's output (clarification
+    # understanding, the plan, the per-step execution log, validation findings).
+    # Goal and Plan are intentionally not shown separately — they live here.
     outputs = task.get("stage_outputs") or {}
     ordered = [s for s in ("clarification", "planning", "execution", "validation") if s in outputs]
     if ordered:
@@ -368,9 +404,8 @@ def _format_task(task: dict) -> str:
         for stage in ordered:
             lines.append(f"    [{stage}]")
             lines += [f"      {ln}" for ln in outputs[stage].splitlines()]
-    threads = task.get("thread_ids") or []
-    if threads:
-        lines += ["", f"  Threads: {', '.join(threads)}"]
+    if task.get("result_path"):
+        lines += ["", f"  Result file: {task['result_path']}"]
     lines.append(sep)
     return "\n".join(lines)
 
@@ -387,7 +422,7 @@ def handle_task_new(args: list[str], agent: JarvisAgent) -> str:
     task = agent.create_task(name)
     return (
         f"Task created: '{task['name']}' ({task['id']}). "
-        f"Stage: {task['stage']}. This thread is now linked to it."
+        f"Describe what you want to accomplish to begin (your next message starts it)."
     )
 
 
@@ -413,14 +448,17 @@ def handle_task_start(args: list[str], agent: JarvisAgent) -> str:
     task = agent.start_task(" ".join(args))
     if task is None:
         return f"Task not found: '{' '.join(args)}'. Use 'task list'."
-    return f"Task '{task['name']}' started. Stage: {task['stage']}."
+    return (
+        f"Entered task '{task['name']}' (stage: {task['stage']}). "
+        f"Type a message to continue, or 'task run'. 'task exit' to leave."
+    )
 
 
-def handle_task_pause(agent: JarvisAgent) -> str:
-    name = agent.pause_task()
+def handle_task_exit(agent: JarvisAgent) -> str:
+    name = agent.exit_task()
     if name is None:
-        return "No active task to pause."
-    return f"Task '{name}' paused and unlinked from this thread (state preserved)."
+        return "Not in a task — you're already in chat mode."
+    return f"Left task '{name}' (state preserved). Back in chat mode; 'task start {name}' to resume."
 
 
 def handle_task_delete(args: list[str], agent: JarvisAgent) -> str:
@@ -430,40 +468,6 @@ def handle_task_delete(args: list[str], agent: JarvisAgent) -> str:
     if name is None:
         return f"Task not found: '{' '.join(args)}'."
     return f"Task '{name}' deleted."
-
-
-def handle_task_next(agent: JarvisAgent) -> str:
-    if agent.active_task is None:
-        return "No active task. Use 'task new <name>' first."
-    new_stage, reply = agent.next_stage()
-    if new_stage is None:
-        return reply  # error message
-    return f"[Task moved to stage: {new_stage}]\n\nA: {reply}"
-
-
-def handle_task_back(agent: JarvisAgent) -> str:
-    if agent.active_task is None:
-        return "No active task. Use 'task new <name>' first."
-    new_stage, reply = agent.back_stage()
-    if new_stage is None:
-        return reply
-    return f"[Task moved to stage: {new_stage}]\n\nA: {reply}"
-
-
-def handle_task_done(args: list[str], agent: JarvisAgent) -> str:
-    if not args:
-        return "Usage: task done <item>"
-    if not agent.add_completed(" ".join(args)):
-        return "No active task. Use 'task new <name>' first."
-    return "Recorded completed item."
-
-
-def handle_task_todo(args: list[str], agent: JarvisAgent) -> str:
-    if not args:
-        return "Usage: task todo <item>"
-    if not agent.add_remaining(" ".join(args)):
-        return "No active task. Use 'task new <name>' first."
-    return "Recorded remaining item."
 
 
 # ── Invariants (single global hard-rule file) ────────────────────────────────

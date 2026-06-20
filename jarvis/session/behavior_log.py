@@ -14,16 +14,15 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-_LOG_PATH = Path.home() / ".jarvis" / "behavior.jsonl"
-
 # Keep the log bounded: personalisation learns from the most recent 100 notes,
 # so the file is trimmed to this many lines on write. Older records are dropped.
 _MAX_RECORDS = 100
 
 
 class BehaviorLog:
-    def __init__(self, path: Path = _LOG_PATH, max_records: int = _MAX_RECORDS) -> None:
-        self._path = path
+    def __init__(self, path: Path | None = None, max_records: int = _MAX_RECORDS) -> None:
+        # Resolve home at instantiation (not import) so $HOME-based test isolation works.
+        self._path = path or (Path.home() / ".jarvis" / "behavior.jsonl")
         self._max_records = max_records
 
     def record(

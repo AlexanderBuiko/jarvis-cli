@@ -56,6 +56,14 @@ python3 -m jarvis
 
 Any other input is sent to the agent as a message.
 
+### Input & status
+
+- The input line **soft-wraps** as you type and grows up to 5 rows for longer messages.
+- Pasting a large block (≥ 1000 characters) collapses it to `[Pasted from clipboard: N characters]` in the line; the full text is restored when you send.
+- While a request is running, a **spinner with elapsed time** shows that work is in progress and input isn't expected.
+- The status line shows context-window usage in tokens.
+- `model` and `context_strategy` are **locked once a thread has messages** — change them on a fresh thread (`thread new` / `thread clear`).
+
 ---
 
 ## Configuration
@@ -140,22 +148,105 @@ Goodbye.
 
 ---
 
+## Tasks: a finite state machine
+
+A *task* is a managed process, not a loose chain of prompts. It moves through a
+finite state machine whose transitions are enforced **in code**, so the rules
+survive summarisation, compaction and thread switches:
+
+```
+clarification → planning → execution → validation → done
+                    ↑___________|            |
+                  (replan)              (rework: back to execution)
+```
+
+Each task persists its **phase** (stage), **current step** and **expected
+action**, plus the approved plan and each stage's result — so work can be paused
+at any phase and resumed later (even in a brand-new chat thread) without
+re-explaining anything.
+
+Each stage is owned by a **stage agent** (clarifier, planner, executor,
+validator) — a small class with an input contract, an output contract, a system
+prompt and (later) tools. An **orchestrator** drives the FSM across these agents.
+
+**Tasks and chat are two separate surfaces.** Threads (`thread …`) are pure
+conversation, no pipeline. A **task is a standalone workspace** with its own
+context, independent of threads: you *enter* it to work the pipeline and *exit*
+back to chat. Inside a task your messages drive its pipeline; outside, they're
+normal chat. The two never cross-contaminate.
+
+| Command | Description |
+|---|---|
+| `task new [name]` | Create a task workspace **and enter it** |
+| `task start <name-or-id>` | Enter an existing task workspace |
+| `task run` | Continue the entered task with no new input |
+| `task exit` | Leave the task, back to chat (state preserved) |
+| `task show` / `task list` | Inspect task state |
+
+Inside a task, **your next message drives it**, and `task run` continues with no
+new input. The pipeline **pauses only when it needs you**:
+
+- a **free-text question** — clarification, or an execution step that needs input;
+- a **Confirm / Reject** choice at the two critical gates — **plan approval** and the
+  final **done** decision. The choices show vertically with an arrow (↑/↓ to move,
+  Enter to select). **Reject** asks *"What's the problem?"* and reworks with your
+  feedback (plan → regenerate; done → back to execution).
+
+Everything in between — clarification→planning, each execution step,
+execution→validation — runs **automatically**. Every transition still goes through
+the code-enforced `ALLOWED_TRANSITIONS`; the model never moves itself.
+
+**Live execution.** Planning parses the plan into discrete steps; execution then
+works **one step per turn** under a **live step table** above the input
+(✓ completed · ▶ in-progress · ○ pending) that redraws in place as each step
+finishes, with a spinner + timer beneath it. Press **Ctrl+C** to stop — the last
+completed step is saved, and `task run` resumes from there.
+
+**The result.** Execution shows concise status, not raw output. At **done** the
+agent assembles the complete deliverable; a **short summary** is shown and the full
+deliverable is **saved to a result file** (`~/.jarvis/tasks/results/<id>.md`, whose
+path is printed and also shown in `task show`).
+
 ## Architecture
 
 ```
 __main__.py           ← wires agent + REPL, starts the application
-agent.py              ← JarvisAgent: conversation history, request pipeline
+agent.py              ← JarvisAgent: conversation, memory, LLM gateway
+llm/
+  engine.py           ← LLMEngine interface (provider-independent)
+  accounting.py       ← per-call cost/usage records
 openrouter/
-  client.py           ← HTTP transport for OpenRouter API
+  client.py           ← OpenRouter implementation of LLMEngine
+pipeline/
+  base.py             ← StageAgent contract + control-marker grammar
+  stages.py           ← clarifier / planner / executor / validator agents
+  orchestrator.py     ← drives the task finite state machine
+  invariants.py       ← InvariantChecker (natural-language requirements linter)
 config/
   manager.py          ← validated key-value configuration store
 prompt_builder/
-  builder.py          ← system prompt and strategy prompt construction
+  builder.py          ← system prompt + working-memory block construction
 repl/
   loop.py             ← REPL loop: reads input, calls agent, prints output
   commands.py         ← built-in command handlers
 session/
   store.py            ← in-memory session log
+  task_store.py       ← task FSM persistence (ALLOWED_TRANSITIONS)
 ```
 
-`JarvisAgent` is the central entity. The REPL is a thin UI layer that calls `agent.chat()` for every non-command input. Conversation history lives on the agent and is included in every API request automatically.
+Following the "build from abstractions" principle, the agent, orchestrator and
+stage agents depend on the `LLMEngine` interface rather than any concrete
+provider — so OpenRouter (or a fake engine, in tests) plugs in behind the same
+contract. `JarvisAgent` remains the central entity: the REPL is a thin UI layer
+that calls `agent.chat()` for free-form input and `agent.run_task()` for the
+pipeline.
+
+## Tests
+
+```
+python -m unittest discover -s tests -t .
+```
+
+Pure unit tests plus integration tests that drive the real agent against a
+`FakeEngine` (no network), covering the FSM transitions, stage contracts,
+orchestrator autonomy/gates, and the pause/resume behaviours.

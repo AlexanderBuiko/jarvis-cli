@@ -1,0 +1,169 @@
+"""Tests for the per-stage agents, marker parsing, and stage I/O contracts."""
+
+import unittest
+
+from jarvis.pipeline.base import (
+    GATE_APPROVAL,
+    GATE_QUESTION,
+    MARKER_NEEDS_USER,
+    MARKER_READY,
+    MARKER_STEP_DONE,
+    parse_markers,
+)
+from jarvis.pipeline.stages import (
+    ClarifierAgent,
+    ExecutorAgent,
+    PlannerAgent,
+    ValidatorAgent,
+    STAGE_AGENTS,
+    parse_plan_steps,
+    stage_system_fragment,
+)
+from jarvis.prompt_builder.builder import build_system_prompt
+
+
+class ParseMarkersTest(unittest.TestCase):
+    def test_strips_marker_and_reports_it(self):
+        clean, found = parse_markers("Here is the plan.\n" + MARKER_READY)
+        self.assertEqual(clean, "Here is the plan.")
+        self.assertEqual(found, {MARKER_READY})
+
+    def test_no_marker(self):
+        clean, found = parse_markers("just text")
+        self.assertEqual(clean, "just text")
+        self.assertEqual(found, set())
+
+    def test_marker_matching_is_case_insensitive(self):
+        # Models emit variants like [[STEP_done]] — they must still be recognised.
+        clean, found = parse_markers("Step 2 result.\n[[STEP_done]]")
+        self.assertEqual(found, {MARKER_STEP_DONE})
+        self.assertEqual(clean, "Step 2 result.")
+
+    def test_marker_tolerates_inner_whitespace(self):
+        clean, found = parse_markers("ok [[ ready ]]")
+        self.assertEqual(found, {MARKER_READY})
+        self.assertEqual(clean, "ok")
+
+
+class ClarifierTest(unittest.TestCase):
+    def test_ready_marker_advances_to_planning(self):
+        task = {"stage": "clarification"}
+        v = ClarifierAgent().process(task, "I understand the task.\n" + MARKER_READY)
+        self.assertTrue(v.ready)
+        self.assertIsNone(v.gate)
+        self.assertEqual(task["expected_action"], "ready_to_plan")
+        self.assertEqual(task["description"], "I understand the task.")
+
+    def test_no_marker_is_a_question_gate(self):
+        task = {"stage": "clarification"}
+        v = ClarifierAgent().process(task, "Which database should I use?")
+        self.assertEqual(v.gate, GATE_QUESTION)
+        self.assertFalse(v.ready)
+        self.assertEqual(task["expected_action"], "await_user")
+
+
+class PlannerTest(unittest.TestCase):
+    def test_input_contract_requires_description(self):
+        ok, _ = PlannerAgent().input_ready({"stage": "planning"})
+        self.assertFalse(ok)
+        ok, _ = PlannerAgent().input_ready({"stage": "planning", "description": "x"})
+        self.assertTrue(ok)
+
+    def test_plan_presents_approval_gate_and_parses_steps(self):
+        task = {"stage": "planning", "description": "x"}
+        v = PlannerAgent().process(task, "1. do a\n2. do b")
+        self.assertEqual(v.gate, GATE_APPROVAL)
+        self.assertEqual(v.confirm_target, "execution")
+        self.assertEqual(v.reject_target, "planning")
+        self.assertEqual(task["plan"], "1. do a\n2. do b")
+        self.assertEqual(task["plan_steps"], ["do a", "do b"])
+        self.assertEqual(task["step_index"], 0)
+        self.assertEqual(task["expected_action"], "await_plan_approval")
+
+
+class ParsePlanStepsTest(unittest.TestCase):
+    def test_numbered(self):
+        self.assertEqual(parse_plan_steps("1. a\n2) b\n3. c"), ["a", "b", "c"])
+
+    def test_bulleted(self):
+        self.assertEqual(parse_plan_steps("- a\n* b\n• c"), ["a", "b", "c"])
+
+    def test_fallback_to_lines(self):
+        self.assertEqual(parse_plan_steps("do a\ndo b"), ["do a", "do b"])
+
+
+class ExecutorTest(unittest.TestCase):
+    def _task(self):
+        return {"stage": "execution", "plan": "p", "plan_steps": ["a", "b", "c"], "step_index": 0}
+
+    def test_input_contract_requires_plan(self):
+        ok, _ = ExecutorAgent().input_ready({"stage": "execution"})
+        self.assertFalse(ok)
+        ok, _ = ExecutorAgent().input_ready({"stage": "execution", "plan": "p"})
+        self.assertTrue(ok)
+
+    def test_step_done_advances_one_step_and_continues(self):
+        task = self._task()
+        v = ExecutorAgent().process(task, "Did step a.\n" + MARKER_STEP_DONE)
+        self.assertTrue(v.continue_stage)
+        self.assertFalse(v.ready)
+        self.assertIsNone(v.gate)
+        self.assertEqual(task["step_index"], 1)
+        self.assertEqual(task["current_step"], "b")
+
+    def test_step_output_accumulates_per_step(self):
+        task = self._task()
+        ex = ExecutorAgent()
+        ex.process(task, "Did step a.\n" + MARKER_STEP_DONE)
+        ex.process(task, "Did step b.\n" + MARKER_STEP_DONE)
+        log = task["stage_outputs"]["execution"]
+        self.assertIn("[step 1/3] Did step a.", log)
+        self.assertIn("[step 2/3] Did step b.", log)
+
+    def test_ready_marks_all_steps_done(self):
+        task = self._task()
+        task["step_index"] = 2
+        v = ExecutorAgent().process(task, "Final step done.\n" + MARKER_READY)
+        self.assertTrue(v.ready)
+        self.assertEqual(task["step_index"], 3)  # == len(steps): all complete
+        self.assertEqual(task["current_step"], "")
+        self.assertEqual(task["expected_action"], "ready_to_validate")
+
+    def test_entry_message_names_current_step(self):
+        task = self._task()
+        task["step_index"] = 1
+        msg = ExecutorAgent().entry_message(task)
+        self.assertIn("step 2 of 3", msg)
+        self.assertIn("b", msg)
+
+    def test_no_marker_is_a_question_gate(self):
+        v = ExecutorAgent().process(self._task(), "What's your answer?\n" + MARKER_NEEDS_USER)
+        self.assertEqual(v.gate, GATE_QUESTION)
+        self.assertFalse(v.ready)
+
+
+class ValidatorTest(unittest.TestCase):
+    def test_validation_presents_approval_gate(self):
+        task = {"stage": "validation", "plan": "p"}
+        v = ValidatorAgent().process(task, "All criteria met.")
+        self.assertEqual(v.gate, GATE_APPROVAL)
+        self.assertEqual(v.confirm_target, "done")
+        self.assertEqual(v.reject_target, "execution")
+        self.assertEqual(task["expected_action"], "await_done_approval")
+
+
+class RegistryTest(unittest.TestCase):
+    def test_every_stage_has_an_agent(self):
+        for stage in ("clarification", "planning", "execution", "validation", "done"):
+            self.assertIn(stage, STAGE_AGENTS)
+
+    def test_build_system_prompt_uses_stage_fragment(self):
+        task = {"stage": "planning", "description": "x"}
+        prompt = build_system_prompt({}, task=task)
+        self.assertIn("PLANNING stage", prompt)
+        # The fragment came from the registry, matching the agent's own text.
+        self.assertIn(stage_system_fragment("planning", task)[:30], prompt)
+
+
+if __name__ == "__main__":
+    unittest.main()

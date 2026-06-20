@@ -1,24 +1,9 @@
 """
-Task scenario — a short, end-to-end demo of working-memory tasks.
+Task scenario — a standalone task workspace, exited and re-entered.
 
-Drives a single task through its whole lifecycle and, crucially, FINISHES IT ON
-A DIFFERENT THREAD than it started on — showing that task state (the approved
-plan and each stage's result) is shared across chats while the conversation
-history is not.
-
-Flow:
-    Thread A  (learn-spanish-A)
-      task new            -> clarification
-      <detailed 1st turn> -> agent restates understanding
-      task next           -> planning   (short plan)
-      task next           -> execution  (present the phrases)
-      <"got it">
-      task next           -> validation (simple quiz)
-      <answers>
-    Thread B  (learn-spanish-B)   ← brand-new chat, empty history
-      task start          -> re-attach the SAME task
-      <"remind me where we are"> -> agent answers from shared task state
-      task next           -> done
+A task is independent of chat threads and carries its own conversation. This demo
+drives a task into execution, EXITS it (back to chat), then RE-ENTERS it later and
+finishes — showing the task resumes from its own preserved state and transcript.
 
 Usage:
     python scripts/task_scenario.py
@@ -34,27 +19,43 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from jarvis.config.manager import ConfigManager
 from jarvis.openrouter.client import OpenRouterClient
 from jarvis.agent import JarvisAgent
+from jarvis.pipeline.base import GATE_APPROVAL, GATE_QUESTION
+from jarvis.repl.loop import _split_summary
 
 SEP = "─" * 66
 
 
-def _stage(agent: JarvisAgent) -> str:
-    t = agent.active_task
-    return t["stage"] if t else "—"
+def _drive(agent: JarvisAgent, answers: list[str], stop_at_stage: str | None = None) -> None:
+    """Drive the active task, auto-confirming approvals and feeding canned answers.
 
-
-def chat(agent: JarvisAgent, text: str) -> None:
-    print(f"\n[{agent.thread_name} · {_stage(agent)}] You: {text}")
-    print(f"Jarvis: {agent.chat(text)}")
-
-
-def task_next(agent: JarvisAgent) -> None:
-    print(f"\n[{agent.thread_name}] ! task next")
-    new_stage, reply = agent.next_stage()
-    if new_stage is None:
-        print(reply)
-        return
-    print(f"→ now in '{new_stage}'\nJarvis: {reply}")
+    Stops when the task reaches stop_at_stage (so the demo can switch threads
+    mid-task), or when it is done.
+    """
+    answers = list(answers)
+    pending = ""
+    for _ in range(40):
+        if stop_at_stage and agent.active_task and agent.active_task["stage"] == stop_at_stage:
+            return
+        feedback, pending = pending, ""
+        result = agent.pipeline_step(feedback)
+        if result is None or result.blocked:
+            print(f"  (stopped: {result.blocked if result else 'no task'})")
+            return
+        arrow = f" → {result.advanced_to}" if result.advanced_to else ""
+        print(f"\n[{agent.thread_name}][{result.stage}]{arrow}\n{result.text}")
+        verdict = result.verdict
+        if verdict.gate == GATE_APPROVAL:
+            print("  ▸ auto-Confirm")
+            agent.advance_to(verdict.confirm_target)
+        elif verdict.gate == GATE_QUESTION:
+            answer = answers.pop(0) if answers else "Proceed with sensible defaults."
+            print(f"  ▸ You: {answer}")
+            pending = f"The user responded: {answer}"
+        elif agent.active_task and agent.active_task["stage"] == "done":
+            summary, deliverable = _split_summary(result.text)
+            path = agent.save_task_result(deliverable)
+            print(f"\n✓ Task complete: {summary}\n   Result saved to {path}")
+            return
 
 
 def main() -> None:
@@ -68,47 +69,36 @@ def main() -> None:
     config.set("seed", "42")  # reproducibility
     agent = JarvisAgent(client, config)
 
-    # ── Thread A: start and run the task up to validation ────────────────────
-    agent.new_thread("learn-spanish-A")
+    # ── Enter the task and drive it into execution ───────────────────────────
     task = agent.create_task("spanish_phrases")
     print(SEP)
-    print(f"Thread A = '{agent.thread_name}'   Task = {task['name']} ({task['id']})")
+    print(f"Entered task = {task['name']} ({task['id']})   (independent of any thread)")
     print(SEP)
 
-    # Detailed initial turn so clarification can finish in one go.
-    chat(
+    _drive(
         agent,
-        "Help me memorise exactly 3 Spanish travel phrases: 'hello', 'thank you', "
-        "and 'where is the bathroom?'. Plan should be short. In execution, just show "
-        "me the three phrases with translations. Validation = I correctly recall all "
-        "three when you quiz me.",
+        answers=[
+            "Help me memorise exactly 3 Spanish travel phrases: 'hello', 'thank you', "
+            "and 'where is the bathroom?'. Plan = 3 numbered steps, one phrase each. "
+            "Execution shows each phrase with its translation. Done when I can recall all three.",
+        ],
+        stop_at_stage="validation",   # leave before finishing, to demo re-entry
     )
 
-    task_next(agent)              # clarification -> planning  (short plan)
-    task_next(agent)              # planning -> execution      (present phrases)
-    chat(agent, "Got it, I've read them.")
-    task_next(agent)             # execution -> validation     (quiz)
-    chat(agent, "Hola; Gracias; ¿Dónde está el baño?")
-
-    # ── Thread B: a brand-new chat — no shared history ───────────────────────
-    agent.new_thread("learn-spanish-B")
+    # ── Exit to chat, then re-enter the task to finish it ────────────────────
+    left = agent.exit_task()
     print("\n" + SEP)
-    print(f"Switched to Thread B = '{agent.thread_name}'  (empty history)")
+    print(f"! task exit   → left '{left}', back in chat mode")
+    agent.start_task("spanish_phrases")
+    print(f"! task start spanish_phrases   → re-entered at stage '{agent.active_task['stage']}'")
     print(SEP)
 
-    agent.start_task("spanish_phrases")
-    print(f"! task start spanish_phrases   → stage '{_stage(agent)}' re-attached")
-
-    # The only thing the agent knows here is the shared TASK state (plan + stage
-    # results), injected via the working-memory block — this thread has no chat
-    # history of the earlier turns.
-    chat(agent, "Remind me what I'm working on and what's left to do.")
-
-    task_next(agent)             # validation -> done, on a different thread
+    # The task resumes from its own preserved state + transcript.
+    _drive(agent, answers=[])
 
     print("\n" + SEP)
-    print("Done. The task started on Thread A and finished on Thread B; the agent on")
-    print("Thread B recalled the plan and progress purely from shared task state.")
+    print("Done. The task was exited and re-entered; it resumed from its own preserved")
+    print("state and transcript — never tied to a chat thread.")
     print(SEP)
 
 
