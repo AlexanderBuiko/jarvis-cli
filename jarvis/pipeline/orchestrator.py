@@ -11,9 +11,9 @@ step() again. This keeps the FSM logic here and the I/O in the driver.
 """
 
 from dataclasses import dataclass
-from typing import Callable
 
 from .base import StageAgent, StageVerdict
+from .runner import StageRunner
 
 
 @dataclass
@@ -26,16 +26,13 @@ class StageResult:
     advanced_to: str | None = None  # the stage advanced to afterwards, if any
 
 
-# A run-turn callable: (entry_message, extra_system) -> raw assistant text.
-RunTurn = Callable[[str, str], str]
-
-
 class Orchestrator:
-    def __init__(self, agents: dict[str, StageAgent], tasks) -> None:
+    def __init__(self, agents: dict[str, StageAgent], tasks, runner: StageRunner) -> None:
         self._agents = agents
         self._tasks = tasks
+        self._runner = runner
 
-    def step(self, task: dict, run_turn: RunTurn, extra_instruction: str = "") -> StageResult:
+    def step(self, task: dict, extra_instruction: str = "") -> StageResult:
         """Run the current stage's agent once and return the result.
 
         extra_instruction (e.g. a user's answer or rework feedback) is appended to
@@ -55,7 +52,7 @@ class Orchestrator:
         entry = agent.entry_message(task)
         if extra_instruction:
             entry = f"{entry}\n\n{extra_instruction}"
-        raw = run_turn(entry, agent.marker_protocol())
+        raw = self._runner.run(task, entry, agent.marker_protocol())
         verdict = agent.process(task, raw)
         self._tasks.save(task)
         result = StageResult(stage=stage, text=verdict.clean_text, verdict=verdict)

@@ -21,8 +21,9 @@ from dataclasses import dataclass
 MARKER_READY = "[[READY]]"          # stage's work is complete -> advance / present approval gate
 MARKER_NEEDS_USER = "[[NEEDS_USER]]"  # stage needs a free-text answer from the user (question gate)
 MARKER_STEP_DONE = "[[STEP_DONE]]"  # execution: this plan step is done, more remain (stay in stage)
+MARKER_REPLAN = "[[REPLAN]]"        # validation: the failure is in the PLAN, not execution -> re-plan
 
-ALL_MARKERS = (MARKER_READY, MARKER_NEEDS_USER, MARKER_STEP_DONE)
+ALL_MARKERS = (MARKER_READY, MARKER_NEEDS_USER, MARKER_STEP_DONE, MARKER_REPLAN)
 
 # Gate kinds — how the driver must pause.
 GATE_QUESTION = "question"   # agent asked something; read a free-text answer and continue
@@ -57,6 +58,8 @@ class StageVerdict:
     next_target: str | None = None     # forward target when ready (None = default forward edge)
     confirm_target: str | None = None  # approval gate: where Confirm advances to
     reject_target: str | None = None   # approval gate: where Reject reworks (may be current stage)
+    replan_target: str | None = None   # approval gate: optional third "revise the plan" target
+    replan_recommended: bool = False   # validator hint that the plan (not execution) is at fault
     expected_action: str = ""     # machine-readable next action (see below)
 
 

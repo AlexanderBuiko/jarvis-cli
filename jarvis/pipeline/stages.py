@@ -18,6 +18,7 @@ from .base import (
     GATE_QUESTION,
     MARKER_NEEDS_USER,
     MARKER_READY,
+    MARKER_REPLAN,
     MARKER_STEP_DONE,
     EXPECTED_AWAIT_DONE_APPROVAL,
     EXPECTED_AWAIT_PLAN_APPROVAL,
@@ -214,8 +215,16 @@ class ValidatorAgent(StageAgent):
         return "Validate the result against the plan and the success criteria, and summarise findings."
 
     def marker_protocol(self) -> str:
-        # No markers: the human always decides at validation (Confirm = done, Reject = rework).
-        return ""
+        # The user always decides at validation, choosing between three outcomes:
+        # mark done, rework execution, or revise the plan. The validator may RECOMMEND
+        # re-planning (when the plan itself is at fault) by emitting the marker — but
+        # the user still chooses.
+        return (
+            "If you find the result falls short because the PLAN is flawed, incomplete, or has "
+            f"been invalidated by what was learned during execution, end your reply with {MARKER_REPLAN} "
+            "to recommend revising the plan. If the result is fine or only execution details need "
+            "fixing, do not add any marker."
+        )
 
     def input_ready(self, task: dict) -> tuple[bool, str]:
         if not task.get("plan"):
@@ -223,11 +232,15 @@ class ValidatorAgent(StageAgent):
         return True, ""
 
     def interpret(self, markers: set[str]) -> StageVerdict:
-        # Finishing the task is a critical decision point: present Confirm / Reject.
+        # Finishing the task is a critical decision point with three user choices:
+        # Confirm (done), rework execution, or revise the plan. The validator only
+        # recommends which reject path fits; the user decides.
         return StageVerdict(
             gate=GATE_APPROVAL,
             confirm_target="done",
-            reject_target="execution",  # reject sends it back for rework
+            reject_target="execution",
+            replan_target="planning",
+            replan_recommended=(MARKER_REPLAN in markers),
             expected_action=EXPECTED_AWAIT_DONE_APPROVAL,
         )
 

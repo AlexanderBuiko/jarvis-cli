@@ -59,6 +59,8 @@ Commands
   task run                      Continue the entered task with no new input
   task exit                     Leave the task, back to chat (state preserved)
   task delete <name-or-id>      Permanently delete a task
+  task attach <name-or-id>      Pin a finished task's result into this thread's context
+  task detach <name-or-id>      Remove an attached task result from this thread
 
   Tasks and chat are two separate surfaces. Threads ('thread …') are pure
   conversation. A task is a standalone workspace with its own context: 'task start'
@@ -75,7 +77,9 @@ Commands
   Execution runs step-by-step under a live step table; press Ctrl+C to stop (the
   last completed step is saved — 'task run' resumes from it). At done, a short
   summary is shown and the full deliverable is saved to a result file (its path is
-  shown and also in 'task show').
+  shown and also in 'task show'). The task is then exited and its result is
+  attached to the current thread, enriching that chat's context. Use
+  'task attach'/'task detach' to manage attachments manually.
 
   invariants                    Show the global invariants (hard rules)
   invariants init               Scaffold invariants.md from a template
@@ -161,7 +165,8 @@ def handle_config_reset(config_manager: ConfigManager) -> str:
 def handle_thread_show(agent: JarvisAgent) -> str:
     """Show what the agent currently holds as conversation context."""
     history = agent.history
-    if not history:
+    attachments = agent.list_attachments()
+    if not history and not attachments:
         return "Conversation history is empty."
     turn_count = len(history) // 2
     tok = agent.thread_total_tokens
@@ -169,6 +174,9 @@ def handle_thread_show(agent: JarvisAgent) -> str:
     tok_str = f"{tok:,} tokens" if tok else "0 tokens"
     cost_str = f"  ${cost:.6f}" if cost else ""
     lines = [f"Conversation context ({turn_count} turn(s))  —  {tok_str}{cost_str}", ""]
+    if attachments:
+        names = ", ".join(f"{a['name']}" for a in attachments)
+        lines += [f"Attached task results ({len(attachments)}): {names}", ""]
     sep = "·" * 40
     turn = 0
     for i in range(0, len(history), 2):
@@ -394,6 +402,14 @@ def _format_task(task: dict) -> str:
     if task.get("notes"):
         lines += ["", f"  Notes:   {task['notes']}"]
 
+    # LLM spend accumulated across this task's stage turns.
+    calls = task.get("api_call_count", 0)
+    if calls:
+        tok = task.get("total_tokens", 0)
+        cost = task.get("total_cost", 0.0)
+        cost_str = f"${cost:.6f}" if cost else "—"
+        lines += ["", f"  Spend:   {calls} request(s) · {tok:,} tokens · {cost_str}"]
+
     # Stage results are the single source for each stage's output (clarification
     # understanding, the plan, the per-step execution log, validation findings).
     # Goal and Plan are intentionally not shown separately — they live here.
@@ -468,6 +484,29 @@ def handle_task_delete(args: list[str], agent: JarvisAgent) -> str:
     if name is None:
         return f"Task not found: '{' '.join(args)}'."
     return f"Task '{name}' deleted."
+
+
+def handle_task_attach(args: list[str], agent: JarvisAgent) -> str:
+    if not args:
+        return "Usage: task attach <name-or-id>"
+    query = " ".join(args)
+    name = agent.attach_task(query)
+    if name is None:
+        return (
+            f"Could not attach '{query}'. The task must exist and have a finished "
+            "result (run it to 'done' first)."
+        )
+    return f"Attached task '{name}' result to thread '{agent.thread_name}'. It now enriches this chat's context."
+
+
+def handle_task_detach(args: list[str], agent: JarvisAgent) -> str:
+    if not args:
+        return "Usage: task detach <name-or-id>"
+    query = " ".join(args)
+    name = agent.detach_task(query)
+    if name is None:
+        return f"No attached task matching '{query}'."
+    return f"Detached task '{name}' from thread '{agent.thread_name}'."
 
 
 # ── Invariants (single global hard-rule file) ────────────────────────────────

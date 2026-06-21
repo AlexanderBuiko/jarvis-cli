@@ -66,10 +66,11 @@ class ThreadStore:
         summary_covered_turns: int = 0,
         facts: str | None = None,
         topic_summaries: dict | None = None,
+        attachments: list | None = None,
     ) -> None:
-        self._write(thread_id, name, messages, total_tokens, total_cost, cost_series or [], summary, summary_covered_turns, facts, topic_summaries or {})
+        self._write(thread_id, name, messages, total_tokens, total_cost, cost_series or [], summary, summary_covered_turns, facts, topic_summaries or {}, attachments or [])
 
-    def load_last(self) -> tuple[str, str, list[dict], int, float, list, str | None, int, str | None, dict] | None:
+    def load_last(self) -> tuple[str, str, list[dict], int, float, list, str | None, int, str | None, dict, list] | None:
         """Return (id, name, messages, total_tokens, total_cost, cost_series, summary, summary_covered_turns, facts, topic_summaries) for the most recently modified thread, or None."""
         files = self._all_files()
         if not files:
@@ -77,7 +78,7 @@ class ThreadStore:
         latest = max(files, key=lambda p: p.stat().st_mtime)
         return self._read(latest)
 
-    def load_by_name_or_id(self, query: str) -> tuple[str, str, list[dict], int, float, list, str | None, int, str | None, dict] | None:
+    def load_by_name_or_id(self, query: str) -> tuple[str, str, list[dict], int, float, list, str | None, int, str | None, dict, list] | None:
         """Find a thread by exact name match, then by id prefix. Returns None if not found."""
         candidates = []
         for path in self._all_files():
@@ -90,11 +91,11 @@ class ThreadStore:
             if tid.startswith(query):
                 candidates.append((*result, path.stat().st_mtime))
         if len(candidates) == 1:
-            return candidates[0][:10]
+            return candidates[0][:-1]  # drop the mtime appended for tie-breaking
         return None
 
-    def rename(self, thread_id: str, new_name: str, messages: list[dict], total_tokens: int = 0, total_cost: float = 0.0, cost_series: list | None = None, summary: str | None = None, summary_covered_turns: int = 0, facts: str | None = None, topic_summaries: dict | None = None) -> None:
-        self._write(thread_id, new_name, messages, total_tokens, total_cost, cost_series or [], summary, summary_covered_turns, facts, topic_summaries or {})
+    def rename(self, thread_id: str, new_name: str, messages: list[dict], total_tokens: int = 0, total_cost: float = 0.0, cost_series: list | None = None, summary: str | None = None, summary_covered_turns: int = 0, facts: str | None = None, topic_summaries: dict | None = None, attachments: list | None = None) -> None:
+        self._write(thread_id, new_name, messages, total_tokens, total_cost, cost_series or [], summary, summary_covered_turns, facts, topic_summaries or {}, attachments or [])
 
     def delete(self, thread_id: str) -> bool:
         """Delete the thread file. Returns True if the file existed."""
@@ -111,7 +112,7 @@ class ThreadStore:
             result = self._read(path)
             if result is None:
                 continue
-            tid, tname, messages, total_tokens, total_cost, cost_series, _summary, _sct, _facts, _topics = result
+            tid, tname, messages, total_tokens, total_cost, cost_series, _summary, _sct, _facts, _topics, _attach = result
             results.append({
                 "id": tid,
                 "name": tname,
@@ -145,6 +146,7 @@ class ThreadStore:
         summary_covered_turns: int = 0,
         facts: str | None = None,
         topic_summaries: dict | None = None,
+        attachments: list | None = None,
     ) -> None:
         self._dir.mkdir(parents=True, exist_ok=True)
         path = self._path(thread_id)
@@ -158,6 +160,7 @@ class ThreadStore:
             "summary_covered_turns": summary_covered_turns,
             "facts": facts,
             "topic_summaries": topic_summaries or {},
+            "attachments": attachments or [],
             "messages": messages,
         }
         if path.exists():
@@ -170,7 +173,7 @@ class ThreadStore:
             payload["created_at"] = _now()
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    def _read(self, path: Path) -> tuple[str, str, list[dict], int, float, list, str | None, int, str | None, dict] | None:
+    def _read(self, path: Path) -> tuple[str, str, list[dict], int, float, list, str | None, int, str | None, dict, list] | None:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
@@ -189,7 +192,10 @@ class ThreadStore:
         topic_summaries = data.get("topic_summaries") or {}
         if not isinstance(topic_summaries, dict):
             topic_summaries = {}
-        return tid, tname, messages, total_tokens, total_cost, cost_series, summary, summary_covered_turns, facts, topic_summaries
+        attachments = data.get("attachments") or []
+        if not isinstance(attachments, list):
+            attachments = []
+        return tid, tname, messages, total_tokens, total_cost, cost_series, summary, summary_covered_turns, facts, topic_summaries, attachments
 
 
 def _now() -> str:

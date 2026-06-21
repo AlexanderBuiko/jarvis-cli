@@ -143,13 +143,24 @@ class ExecutorTest(unittest.TestCase):
 
 
 class ValidatorTest(unittest.TestCase):
-    def test_validation_presents_approval_gate(self):
+    def test_validation_offers_three_targets(self):
         task = {"stage": "validation", "plan": "p"}
         v = ValidatorAgent().process(task, "All criteria met.")
         self.assertEqual(v.gate, GATE_APPROVAL)
         self.assertEqual(v.confirm_target, "done")
-        self.assertEqual(v.reject_target, "execution")
+        self.assertEqual(v.reject_target, "execution")   # rework execution
+        self.assertEqual(v.replan_target, "planning")    # revise the plan (always available)
+        self.assertFalse(v.replan_recommended)
         self.assertEqual(task["expected_action"], "await_done_approval")
+
+    def test_replan_marker_only_recommends(self):
+        from jarvis.pipeline.base import MARKER_REPLAN
+        task = {"stage": "validation", "plan": "p"}
+        v = ValidatorAgent().process(task, "The plan missed a step.\n" + MARKER_REPLAN)
+        # The targets are unchanged — the marker only flags a recommendation.
+        self.assertEqual(v.replan_target, "planning")
+        self.assertTrue(v.replan_recommended)
+        self.assertNotIn("[[", v.clean_text)  # marker stripped from shown text
 
 
 class RegistryTest(unittest.TestCase):
