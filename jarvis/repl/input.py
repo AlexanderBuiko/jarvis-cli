@@ -42,7 +42,7 @@ COMMAND_TREE: dict[str, dict] = {
     "session": {"chat": {}, "summary": {}, "api": {}},
     "thread":  {"summary": {}, "load": {}, "new": {}, "clear": {}, "rename": {}, "delete": {}},
     "config":  {"show": {}, "set": {}, "update": {}, "reset": {}},
-    "task":    {"new": {}, "list": {}, "show": {}, "start": {}, "run": {}, "exit": {}, "delete": {}},
+    "task":    {"new": {}, "list": {}, "show": {}, "start": {}, "run": {}, "exit": {}, "delete": {}, "attach": {}, "detach": {}},
     "invariants": {"show": {}, "init": {}},
     "profile": {"show": {}, "onboard": {}},
     "personalize": {},

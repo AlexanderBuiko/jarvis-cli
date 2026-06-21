@@ -90,6 +90,20 @@ class TaskStoreTest(unittest.TestCase):
         self.assertIn("planning", ALLOWED_TRANSITIONS["execution"])
         self.assertEqual(ALLOWED_TRANSITIONS["execution"][0], "validation")
 
+    def test_validation_can_return_to_planning(self):
+        # Validation may re-plan directly when the plan itself is at fault.
+        task = self.store.new_task("demo")
+        for _ in range(3):
+            self.store.advance_stage(task)  # -> validation
+        self.assertEqual(task["stage"], "validation")
+        self.assertEqual(self.store.advance_stage(task, "planning"), "planning")
+
+    def test_new_task_has_accounting_fields(self):
+        task = self.store.new_task("demo")
+        self.assertEqual(task["api_call_count"], 0)
+        self.assertEqual(task["total_tokens"], 0)
+        self.assertEqual(task["total_cost"], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

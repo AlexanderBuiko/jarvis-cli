@@ -34,19 +34,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-# Task state machine. Basic stages; expand with caution.
-STAGES: tuple[str, ...] = ("clarification", "planning", "execution", "validation", "done")
-
-# Allowed forward (and revision) transitions. Anything not listed is rejected.
-# The first entry of each list is the default forward transition; later entries
-# are revision/branch targets that must be requested explicitly.
-ALLOWED_TRANSITIONS: dict[str, list[str]] = {
-    "clarification": ["planning"],
-    "planning":      ["execution"],
-    "execution":     ["validation", "planning"],  # validate, or back to planning to revise the plan
-    "validation":    ["done", "execution"],        # done, or back to execution for revision
-    "done":          [],
-}
+# The FSM policy (valid states + permitted transitions) lives in pipeline.fsm as
+# the single source of truth. Re-exported here for backward compatibility with
+# callers/tests that import these names from the store.
+from ..pipeline.fsm import STAGES, ALLOWED_TRANSITIONS, resolve_transition
 
 
 class TaskStore:
@@ -74,6 +65,10 @@ class TaskStore:
             "notes": "",
             "stage_outputs": {},
             "messages": [],
+            # Accounting: LLM spend accumulated across this task's stage turns.
+            "api_call_count": 0,
+            "total_tokens": 0,
+            "total_cost": 0.0,
             "created_at": now,
             "updated_at": now,
         }
@@ -137,17 +132,7 @@ class TaskStore:
         execution); for every other stage the single allowed transition is used.
         Raises ValueError if the transition is not permitted.
         """
-        current = task["stage"]
-        allowed = ALLOWED_TRANSITIONS.get(current, [])
-        if not allowed:
-            raise ValueError(f"task is already in the terminal stage '{current}'")
-        if target is None:
-            target = allowed[0]
-        if target not in allowed:
-            raise ValueError(
-                f"cannot move {current} → {target} "
-                f"(allowed: {', '.join(allowed)})"
-            )
+        target = resolve_transition(task["stage"], target)
         task["stage"] = target
         # current_step belongs to a stage; clear it so the new stage starts fresh.
         task["current_step"] = ""
@@ -189,6 +174,9 @@ class TaskStore:
         data.setdefault("notes", "")
         data.setdefault("stage_outputs", {})
         data.setdefault("messages", [])
+        data.setdefault("api_call_count", 0)
+        data.setdefault("total_tokens", 0)
+        data.setdefault("total_cost", 0.0)
         return data
 
 

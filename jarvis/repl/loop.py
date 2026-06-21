@@ -37,6 +37,8 @@ from .commands import (
     handle_task_start,
     handle_task_exit,
     handle_task_delete,
+    handle_task_attach,
+    handle_task_detach,
     handle_invariants_show,
     handle_invariants_init,
     handle_profile_show,
@@ -200,12 +202,22 @@ def _drive_task(agent: JarvisAgent, controller: InputController, initial_pending
         if agent.active_task and agent.active_task["stage"] == "done":
             summary, deliverable = _split_summary(result.text)
             path = agent.save_task_result(deliverable)
+            thread = agent.thread_name
+            # On completion, the result is attached to the active thread and the
+            # task is exited — enriching the thread's context with the deliverable.
+            name = agent.finish_active_task(summary, deliverable)
             print(f"[done] {summary}\n")
-            return f"✓ Task complete. Full result saved to {path}"
+            return (
+                f"✓ Task '{name}' complete. Result saved to {path} and attached to "
+                f"thread '{thread}' (use it in chat; 'task detach {name}' to remove)."
+            )
 
         header = f"[{result.stage}]"
         if result.advanced_to:
             header += f" → {result.advanced_to}"
+        task_now = agent.active_task
+        if task_now and task_now.get("api_call_count"):
+            header += f"  ·  {task_now['api_call_count']} reqs · ${task_now.get('total_cost', 0.0):.6f}"
         print(f"{header}\n{result.text}\n")
 
         if interrupted:
@@ -213,23 +225,25 @@ def _drive_task(agent: JarvisAgent, controller: InputController, initial_pending
 
         verdict = result.verdict
         if verdict and verdict.gate == GATE_APPROVAL:
-            title, options = _approval_prompt(result.stage)
-            choice = controller.select(title, options)
+            title, choices = _approval_choices(result.stage, verdict)
+            choice = controller.select(title, [label for label, _ in choices])
+            if choice is None or choice < 0 or choice >= len(choices):
+                print(f"{title}  →  (cancelled)\n")
+                return "Paused. Run 'task run' to resume."
+            label, target = choices[choice]
+            print(f"{title}  →  {label}\n")  # replaces the erased arrow menu
             if choice == 0:
-                print(f"{title}  →  Confirmed\n")  # replaces the erased arrow menu
-                agent.advance_to(verdict.confirm_target)
+                # The Confirm choice: advance with no rework feedback.
+                agent.advance_to(target)
                 continue
-            if choice == 1:
-                print(f"{title}  →  Rejected\n")
-                problem = controller.read_text("What's the problem?")
-                agent.advance_to(verdict.reject_target)
-                pending = (
-                    f"The user rejected this and asked for changes: {problem}\nRevise accordingly."
-                    if problem else "The user rejected this; please revise."
-                )
-                continue
-            print(f"{title}  →  (cancelled)\n")
-            return "Paused. Run 'task run' to resume."
+            # A reject-style choice: gather feedback and route to its target.
+            problem = controller.read_text("What's the problem?")
+            agent.advance_to(target)
+            pending = (
+                f"The user rejected this and asked for changes: {problem}\nRevise accordingly."
+                if problem else "The user rejected this; please revise."
+            )
+            continue
 
         if verdict and verdict.gate == GATE_QUESTION:
             answer = controller.read_text("Your answer:")
@@ -342,19 +356,38 @@ def _split_summary(text: str) -> tuple[str, str]:
     return first[:200], text.strip()
 
 
-def _approval_prompt(stage: str) -> tuple[str, list[str]]:
-    """Title and (Confirm, Reject) labels for an approval gate, made explicit."""
+def _approval_choices(stage: str, verdict) -> tuple[str, list[tuple[str, str | None]]]:
+    """Return (title, [(label, target_stage), ...]) for an approval gate.
+
+    The first choice is always the Confirm (advance, no feedback); the rest are
+    reject-style choices (ask for feedback, then route to their target). Validation
+    is user-driven with three choices — mark done, rework execution, or revise the
+    plan — so the user always controls a re-plan, not the model.
+    """
     if stage == "planning":
         return (
             "Approve this plan?",
-            ["Confirm — start execution", "Reject — revise the plan"],
+            [
+                ("Confirm — start execution", verdict.confirm_target),
+                ("Reject — revise the plan", verdict.reject_target),
+            ],
         )
     if stage == "validation":
+        replan_label = "Reject — revise the plan"
+        if getattr(verdict, "replan_recommended", False):
+            replan_label += "  (recommended)"
         return (
-            "Validation complete — finish the task?",
-            ["Confirm — mark done", "Reject — send back to execution"],
+            "Validation complete — what next?",
+            [
+                ("Confirm — mark done", verdict.confirm_target),
+                ("Reject — rework execution", verdict.reject_target),
+                (replan_label, verdict.replan_target),
+            ],
         )
-    return ("Proceed?", ["Confirm", "Reject"])
+    return (
+        "Proceed?",
+        [("Confirm", verdict.confirm_target), ("Reject", verdict.reject_target)],
+    )
 
 
 # ── Dispatcher ────────────────────────────────────────────────────────────────
@@ -437,9 +470,14 @@ def _dispatch(
             return handle_task_exit(agent)
         if sub == "delete":
             return handle_task_delete(args[1:], agent)
+        if sub == "attach":
+            return handle_task_attach(args[1:], agent)
+        if sub == "detach":
+            return handle_task_detach(args[1:], agent)
         return (
             "Usage: task | task new [name] | task list | task start <name-or-id> | "
-            "task run | task exit | task delete <name-or-id>"
+            "task run | task exit | task delete <name-or-id> | "
+            "task attach <name-or-id> | task detach <name-or-id>"
         )
 
     if cmd == "invariants":

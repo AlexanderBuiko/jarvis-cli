@@ -2,6 +2,7 @@
 
 import unittest
 
+from jarvis.llm.gateway import LLMGateway
 from jarvis.openrouter.client import Completion
 from jarvis.pipeline.invariants import InvariantChecker, _invariants_ok
 from tests.fake_engine import FakeEngine
@@ -32,7 +33,7 @@ class InvariantsOkTest(unittest.TestCase):
 class InvariantCheckerTest(unittest.TestCase):
     def test_compliant_reply_passes_unchanged(self):
         engine = FakeEngine(scripted=["OK"])
-        checker = InvariantChecker(engine)
+        checker = InvariantChecker(LLMGateway(engine))
         api_calls: list[dict] = []
         completion = _dummy_completion()
 
@@ -54,7 +55,7 @@ class InvariantCheckerTest(unittest.TestCase):
 
     def test_violation_triggers_single_resolution(self):
         engine = FakeEngine(scripted=["- rule : violated", "resolved answer"])
-        checker = InvariantChecker(engine)
+        checker = InvariantChecker(LLMGateway(engine))
         api_calls: list[dict] = []
 
         text, notice, returned = checker.validate(

@@ -144,6 +144,31 @@ def build_working_memory_block(task: dict[str, Any]) -> list[dict]:
     ]
 
 
+def build_attachments_block(attachments: list[dict]) -> list[dict]:
+    """Return a pseudo-exchange carrying finished task results pinned to the thread.
+
+    Injected ahead of the conversation history so the model can draw on a task's
+    deliverable as reference material in ordinary chat — the explicit, opt-in
+    version of "enrich the thread with a task result" (see `task attach`).
+    """
+    if not attachments:
+        return []
+    lines = ["[Attached task results — reference material for this conversation]"]
+    for a in attachments:
+        name = a.get("name", "task")
+        summary = a.get("summary", "")
+        header = f"## {name} — {summary}".rstrip(" —")
+        lines.append("")
+        lines.append(header)
+        content = (a.get("content") or "").strip()
+        if content:
+            lines.append(content)
+    return [
+        {"role": "user", "content": "\n".join(lines)},
+        {"role": "assistant", "content": "Understood — I'll use the attached task result(s) as context."},
+    ]
+
+
 def _preceding_stage_output(task: dict[str, Any]) -> tuple[str, str] | None:
     """Return (stage, output) for the most recent completed stage before the current one."""
     outputs = task.get("stage_outputs") or {}

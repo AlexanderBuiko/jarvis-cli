@@ -9,8 +9,7 @@ distinct from the ValidatorAgent: this is a per-turn, cross-cutting filter on ev
 answer, whereas the ValidatorAgent validates the task *result* at the validation stage.
 """
 
-from ..llm.accounting import make_call_record
-from ..llm.engine import LLMEngine
+from ..llm.gateway import LLMGateway
 from ..openrouter.client import Completion
 from ..prompt_builder.builder import (
     build_invariant_check_prompt,
@@ -19,8 +18,8 @@ from ..prompt_builder.builder import (
 
 
 class InvariantChecker:
-    def __init__(self, engine: LLMEngine) -> None:
-        self._engine = engine
+    def __init__(self, gateway: LLMGateway) -> None:
+        self._gateway = gateway
 
     def validate(
         self,
@@ -40,8 +39,10 @@ class InvariantChecker:
         """
         check_prompt = build_invariant_check_prompt(invariants, response_text)
         check_params = {"model": params["model"]} if "model" in params else {}
-        check = self._engine.complete([{"role": "user", "content": check_prompt}], check_params)
-        api_calls.append(make_call_record(len(api_calls) + 1, "invariant_check", check, self._engine))
+        check = self._gateway.complete(
+            [{"role": "user", "content": check_prompt}], check_params,
+            label="invariant_check", api_calls=api_calls,
+        )
 
         if _invariants_ok(check.text):
             return response_text, None, completion
@@ -51,8 +52,10 @@ class InvariantChecker:
             {"role": "assistant", "content": response_text},
             {"role": "user", "content": resolution_prompt},
         ]
-        resolution = self._engine.complete(resolution_messages, params)
-        api_calls.append(make_call_record(len(api_calls) + 1, "invariant_resolution", resolution, self._engine))
+        resolution = self._gateway.complete(
+            resolution_messages, params,
+            label="invariant_resolution", api_calls=api_calls,
+        )
         notice = (
             "[Invariant check: your request conflicted with the configured invariants — "
             "the reply above was adjusted or declined to respect them.]"

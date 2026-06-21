@@ -37,5 +37,18 @@ class PasteCollapseTest(unittest.TestCase):
         self.assertEqual(self.ic._expand_pastes(ph_b), b)
 
 
+class TaskAttachCompletionTest(unittest.TestCase):
+    """attach / detach autocomplete as task subcommands."""
+
+    def test_prefix_completes_attach_and_detach(self):
+        from jarvis.repl.input import get_suggestions, apply_suggestion
+        self.assertEqual(get_suggestions("task at"), ["attach"])
+        self.assertEqual(get_suggestions("task det"), ["detach"])
+        # 'de' is ambiguous between delete and detach — both are offered.
+        self.assertEqual(set(get_suggestions("task de")), {"delete", "detach"})
+        # Accepting the suggestion produces the full command.
+        self.assertEqual(apply_suggestion("task at", "attach"), "task attach")
+
+
 if __name__ == "__main__":
     unittest.main()
