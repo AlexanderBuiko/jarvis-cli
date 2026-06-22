@@ -11,6 +11,7 @@ fully independent of chat threads. It lives as a JSON file under
     "current_step":  "…",          # the step being worked within the current stage
     "expected_action": "…",        # machine-readable next action (e.g. await_user, await_plan_approval)
     "plan_steps":    ["…", …],     # the plan parsed into ordered, trackable steps
+    "plan_deps":     [[], [0], …], # per-step dependencies (0-based) for parallel execution
     "step_index":    2,            # index of the in-progress step (steps before it are done)
     "description":   "…",
     "plan":          "…",
@@ -58,6 +59,7 @@ class TaskStore:
             "current_step": "",
             "expected_action": "",
             "plan_steps": [],
+            "plan_deps": [],
             "step_index": 0,
             "result_path": "",
             "description": "",
@@ -137,9 +139,13 @@ class TaskStore:
         # current_step belongs to a stage; clear it so the new stage starts fresh.
         task["current_step"] = ""
         # Entering execution (forward, or back from validation for rework) starts
-        # step-wise progress from the first plan step.
+        # step-wise progress from the first plan step. The previous execution log is
+        # cleared so a rework produces a FRESH deliverable instead of appending to
+        # (and compounding) the old one — otherwise validation keeps re-reading stale,
+        # ever-growing output and rework can never converge.
         if target == "execution":
             task["step_index"] = 0
+            (task.get("stage_outputs") or {}).pop("execution", None)
         self.save(task)
         return target
 
@@ -167,6 +173,7 @@ class TaskStore:
         data.setdefault("current_step", "")
         data.setdefault("expected_action", "")
         data.setdefault("plan_steps", [])
+        data.setdefault("plan_deps", [])
         data.setdefault("step_index", 0)
         data.setdefault("result_path", "")
         data.setdefault("description", "")

@@ -142,6 +142,12 @@ classDiagram
     class LLMStageRunner {
         +run(task, entry, extra) str
     }
+    class SwarmStageRunner {
+        +run(task, entry, extra) str
+    }
+    class ParallelExecutionRunner {
+        +run(task, entry, extra) str
+    }
     class StageResult {
         +str stage
         +str text
@@ -188,6 +194,10 @@ classDiagram
     }
 
     LLMStageRunner ..|> StageRunner
+    SwarmStageRunner ..|> StageRunner
+    ParallelExecutionRunner ..|> StageRunner
+    SwarmStageRunner --> LLMStageRunner : delegates non-validation
+    ParallelExecutionRunner --> SwarmStageRunner : delegates non-execution
     Orchestrator --> StageRunner : runner
     Orchestrator --> TaskStore
     Orchestrator ..> StageResult : returns
@@ -215,6 +225,64 @@ stateDiagram-v2
     validation --> execution : rework execution
     validation --> planning : re-plan ([[REPLAN]])
     done --> [*]
+```
+
+### Validation swarm (opt-in via `review_agents` > 1)
+
+The `validation` stage can be run by a panel of reviewer agents instead of the
+single `ValidatorAgent` turn. `SwarmStageRunner` sits on the same `StageRunner`
+seam: for `validation` it fans the turn out to N independent reviewers, then a
+consolidator agent (which knows the user's request) merges their opinions into one
+decision; for every other stage it delegates to `LLMStageRunner` unchanged. The
+reviewers never see each other's output — all opinions flow only through the
+consolidator (no agent-to-agent comms). The consolidated text carries the existing
+markers, so `ValidatorAgent` maps it onto the unchanged 3-way human gate
+(`[[REPLAN]]` ⇒ "revise the plan" recommended). Cost is bounded: ~N+1 model calls
+per validation turn, all through `LLMGateway` and all accounted onto the task.
+
+```mermaid
+flowchart TD
+    O[Orchestrator.step\nstage = validation] --> S[SwarmStageRunner.run]
+    S -->|review_agents == 1| B[LLMStageRunner\nsingle ValidatorAgent turn]
+    S -->|review_agents > 1| P{Reviewer panel\nindependent, own invariants}
+    P --> R1[Correctness]
+    P --> R2[Goal fit]
+    P --> R3[Completeness]
+    P --> R4[Robustness]
+    P --> R5[Clarity]
+    R1 --> C[ConsolidatorAgent\nknows goal/plan/criteria]
+    R2 --> C
+    R3 --> C
+    R4 --> C
+    R5 --> C
+    C -->|APPROVE / REWORK_EXECUTION / REVISE_PLAN| T[consolidated text\n+ marker]
+    T --> V[ValidatorAgent.process\n→ 3-way gate verdict]
+    B --> V
+```
+
+### Parallel execution (opt-in via `execution_agents` > 1)
+
+The `execution` stage can run its plan steps with a pool of executor agents instead
+of one step per turn. `PlannerAgent` annotates each step with `[after: …]`, parsed
+into a dependency graph (`plan_deps`). `ParallelExecutionRunner` (same `StageRunner`
+seam) groups the steps into topological **waves** — every step in a wave has its
+dependencies satisfied — and runs the steps *within* a wave concurrently, the waves
+in order. Dependent steps receive their upstream steps' outputs. It assembles the
+results, accounts every call, and emits `[[READY]]` so the orchestrator advances
+`execution → validation` on the normal forward edge. Off (`execution_agents == 1`),
+it delegates to the sequential per-step runner unchanged.
+
+```mermaid
+flowchart TD
+    O[Orchestrator.step\nstage = execution] --> X[ParallelExecutionRunner.run]
+    X -->|execution_agents == 1| BX[LLMStageRunner\none step per turn]
+    X -->|execution_agents > 1| W[execution_waves plan_deps]
+    W --> w0[wave 0: independent steps\nrun concurrently]
+    w0 --> w1[wave 1: steps whose deps\nare now done]
+    w1 --> A[assemble outputs in order\n+ account calls]
+    A --> RD[ExecutorAgent.process\n_exec_recorded → READY]
+    RD --> AV[advance execution → validation]
+    BX --> AV
 ```
 
 ---

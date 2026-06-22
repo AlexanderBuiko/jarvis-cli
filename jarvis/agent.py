@@ -13,6 +13,8 @@ from .llm.gateway import LLMGateway
 from .pipeline.invariants import InvariantChecker
 from .pipeline.orchestrator import Orchestrator
 from .pipeline.runner import LLMStageRunner
+from .pipeline.swarm import SwarmStageRunner
+from .pipeline.parallel import ParallelExecutionRunner
 from .pipeline.stages import STAGE_AGENTS
 from .memory.coordinator import MemoryCoordinator, COMPRESSION_INTERVAL
 from .personalization.service import PersonalizationService
@@ -81,6 +83,17 @@ class JarvisAgent:
         self._stage_runner = LLMStageRunner(
             self._gateway, config_manager, self._memory,
             self._profile, self._invariants, self._invariant_checker, self._tasks,
+        )
+        # Stage runners are layered onto the base seam, each overriding one stage and
+        # delegating the rest, so the FSM and the rest of the app are untouched:
+        #   • SwarmStageRunner — opt-in reviewer swarm on `validation` (review_agents>1)
+        #   • ParallelExecutionRunner — opt-in parallel `execution` (execution_agents>1)
+        # Both default to the original single-turn behaviour and token cost.
+        self._stage_runner = SwarmStageRunner(
+            self._gateway, config_manager, self._stage_runner, self._tasks,
+        )
+        self._stage_runner = ParallelExecutionRunner(
+            self._gateway, config_manager, self._stage_runner, self._tasks,
         )
         self._orchestrator = Orchestrator(STAGE_AGENTS, self._tasks, self._stage_runner)
 
@@ -371,11 +384,18 @@ class JarvisAgent:
         return name
 
     def delete_task(self, query: str) -> str | None:
-        """Delete a task file. Leaves it if it is the one currently entered."""
+        """Delete a task file and detach its result from every thread.
+
+        A finished task's deliverable can be pinned into any thread's context
+        (`task attach`, or automatically on completion). Deleting the task must also
+        remove those attachments, so its result can't linger as a dangling pin on the
+        active thread or any thread on disk.
+        """
         task = self._tasks.find(query)
         if task is None:
             return None
         self._tasks.delete(task["id"])
+        self._conversation.purge_attachment(task["id"])
         if self._active_task and self._active_task["id"] == task["id"]:
             self._active_task = None
         return task["name"]
@@ -412,7 +432,14 @@ class JarvisAgent:
             return None
         if self._active_task["stage"] == target:
             return target  # rework in place — stay in the stage
-        return self._tasks.advance_stage(self._active_task, target)
+        # advance_stage enforces ALLOWED_TRANSITIONS and raises on an illegal jump.
+        # In normal flow the target always comes from the stage verdict (so it is
+        # valid), but guard the user-reachable path so a bad target surfaces as a
+        # clean None rather than crashing the REPL — the FSM stays where it was.
+        try:
+            return self._tasks.advance_stage(self._active_task, target)
+        except ValueError:
+            return None
 
     # ── Task ↔ thread attachments ───────────────────────────────────────────────
 

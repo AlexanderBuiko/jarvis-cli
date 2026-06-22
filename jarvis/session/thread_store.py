@@ -21,6 +21,7 @@ Legacy single-file history (~/.jarvis/history.json) is migrated on first use.
 """
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -104,6 +105,36 @@ class ThreadStore:
             path.unlink()
             return True
         return False
+
+    def purge_attachment(self, task_id: str, skip_id: str | None = None) -> int:
+        """Remove any attachment of ``task_id`` from every thread file (used when a
+        task is deleted, so a dangling result can't haunt a chat). ``skip_id`` lets
+        the caller skip a thread it handles itself (e.g. the active, in-memory one).
+
+        Rewrites the raw JSON in place — preserving every other field — and restores
+        each touched file's mtime so the 'last used' thread is unaffected. Returns the
+        number of threads changed.
+        """
+        changed = 0
+        for path in self._all_files():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if skip_id and data.get("id") == skip_id:
+                continue
+            attachments = data.get("attachments")
+            if not isinstance(attachments, list):
+                continue
+            kept = [a for a in attachments if a.get("task_id") != task_id]
+            if len(kept) == len(attachments):
+                continue
+            data["attachments"] = kept
+            mtime = path.stat().st_mtime
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.utime(path, (mtime, mtime))  # keep the original "last used" ordering
+            changed += 1
+        return changed
 
     def list_all(self) -> list[dict]:
         """Return thread metadata sorted by modification time, newest first."""

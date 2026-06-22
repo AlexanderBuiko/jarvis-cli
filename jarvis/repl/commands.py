@@ -126,6 +126,15 @@ Parameters
                              Can only be changed on an empty thread.
 
   window_size        int    Number of turns kept when context_strategy=sliding_window (default: 10)
+
+  review_agents      int    Reviewers on the validation swarm (1–5, default 1). 1 = the single
+                            validator; >1 runs an independent reviewer panel + consolidator
+                            (~N+1 model calls per validation turn, all billed to the task,
+                            run concurrently).
+
+  execution_agents   int    Agents executing the plan in parallel (1–8, default 1). 1 = sequential,
+                            one step per turn; >1 runs independent steps concurrently, ordering
+                            dependent ones via the plan's [after: …] annotations.
 """
 
 
@@ -368,10 +377,23 @@ def render_plan_progress(task: dict) -> str | None:
     steps = task.get("plan_steps") or []
     if not steps:
         return None
+    width = len(str(len(steps)))
+
+    # Parallel execution publishes a live per-step status (several steps can be
+    # in-progress at once); prefer it so the table reflects real concurrency. Falls
+    # back to the single-cursor step_index model for sequential execution.
+    status = task.get("_step_status")
+    if status and len(status) == len(steps):
+        glyphs = {"done": "✓", "running": "▶", "pending": "○"}
+        done = sum(1 for s in status if s == "done")
+        lines = [f"Steps ({done}/{len(steps)} done)"]
+        for i, step in enumerate(steps):
+            lines.append(f"  {glyphs.get(status[i], '○')}  {str(i + 1).rjust(width)}. {step}")
+        return "\n".join(lines)
+
     idx = task.get("step_index", 0)
     done = min(idx, len(steps))
     lines = [f"Steps ({done}/{len(steps)} done)"]
-    width = len(str(len(steps)))
     for i, step in enumerate(steps):
         glyph = "✓" if i < idx else ("▶" if i == idx else "○")
         lines.append(f"  {glyph}  {str(i + 1).rjust(width)}. {step}")

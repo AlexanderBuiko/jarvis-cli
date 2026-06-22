@@ -51,6 +51,49 @@ def parse_plan_steps(plan_text: str) -> list[str]:
     return [ln.strip() for ln in plan_text.splitlines() if ln.strip()]
 
 
+_AFTER = re.compile(r"\[\s*after\s*:\s*([^\]]*)\]\s*$", re.IGNORECASE)
+
+
+def parse_plan(plan_text: str) -> tuple[list[str], list[list[int]]]:
+    """Parse a plan into (steps, deps).
+
+    ``deps[i]`` holds the 0-based indices of the steps that must finish before step
+    ``i``, read from an optional ``[after: 1, 2]`` annotation at the end of the step
+    (``[after: none]`` or no annotation ⇒ no dependencies). This is what lets the
+    parallel executor run independent steps at once while ordering dependent ones.
+    Back-compatible: an un-annotated plan yields every step independent.
+
+    Dependencies are sanitised to point only at EARLIER steps (a plan is ordered),
+    so a forward or self reference is dropped rather than risking a cycle.
+    """
+    steps: list[str] = []
+    raw_deps: list[list[int]] = []
+    for text in parse_plan_steps(plan_text):
+        deps: list[int] = []
+        m = _AFTER.search(text)
+        if m:
+            text = text[: m.start()].strip()
+            body = m.group(1).strip().lower()
+            if body and body != "none":
+                deps = [int(tok) - 1 for tok in re.split(r"[,\s]+", body) if tok.isdigit()]
+        steps.append(text)
+        raw_deps.append(deps)
+    deps_out = [sorted({d for d in ds if 0 <= d < i}) for i, ds in enumerate(raw_deps)]
+    return steps, deps_out
+
+
+_STEP_LABEL = re.compile(r"^\[step[^\]]*\]\s*", re.IGNORECASE | re.MULTILINE)
+
+
+def assemble_deliverable(execution_output: str) -> str:
+    """Strip the per-step scaffolding labels (``[step 1/6] …``) from the execution
+    log so the result reads as one continuous deliverable. The labels are a process
+    artifact for progress tracking, not part of the work product — validation and the
+    done stage care about the content, not the bookkeeping.
+    """
+    return _STEP_LABEL.sub("", execution_output).strip()
+
+
 class ClarifierAgent(StageAgent):
     stage = "clarification"
 
@@ -101,12 +144,17 @@ class PlannerAgent(StageAgent):
             "creates part of the final result (e.g. for a recipe: 'list the ingredients', 'write "
             "the cooking instructions') — NOT a question to the user. Requirements are already "
             "settled in clarification; do NOT ask the user anything, and choose sensible defaults "
-            "for any minor unspecified detail. The user will approve the plan or ask for changes."
+            "for any minor unspecified detail. The user will approve the plan or ask for changes.\n"
+            "End EACH step with a dependency annotation '[after: <the step numbers whose output this "
+            "step needs, comma-separated>]', or '[after: none]' when the step can be done on its own. "
+            "Mark steps independent whenever they genuinely are — independent steps can be produced in "
+            "parallel, so do not invent ordering that isn't required."
         )
 
     def entry_message(self, task: dict) -> str:
         return (
             "Produce the concrete, ordered, numbered plan of steps that will PRODUCE the deliverable. "
+            "End each step with '[after: <step numbers it depends on>]' (or '[after: none]'). "
             "Do not include any steps that ask the user questions."
         )
 
@@ -131,8 +179,9 @@ class PlannerAgent(StageAgent):
     def record(self, task: dict, clean_text: str, verdict: StageVerdict) -> None:
         super().record(task, clean_text, verdict)
         task["plan"] = clean_text
-        # Parse the plan into trackable steps and reset progress to the first one.
-        task["plan_steps"] = parse_plan_steps(clean_text)
+        # Parse the plan into trackable steps + their dependency graph, and reset
+        # progress to the first one. plan_deps drives the parallel executor.
+        task["plan_steps"], task["plan_deps"] = parse_plan(clean_text)
         task["step_index"] = 0
         task["current_step"] = task["plan_steps"][0] if task["plan_steps"] else ""
 
@@ -186,6 +235,14 @@ class ExecutorAgent(StageAgent):
     def record(self, task: dict, clean_text: str, verdict: StageVerdict) -> None:
         steps = task.get("plan_steps") or []
         idx = task.get("step_index", 0)
+        # A parallel runner may have produced and stored the whole execution output
+        # this turn; if so, don't re-append it — just keep the progress pointer
+        # consistent (all steps done).
+        if task.pop("_exec_recorded", False):
+            task.pop("_step_status", None)  # live render state — never persist it
+            task["step_index"] = len(steps)
+            task["current_step"] = ""
+            return
         # Accumulate a per-step execution log so every step persists (and survives a
         # thread switch), rather than overwriting with only the latest step.
         outputs = task.setdefault("stage_outputs", {})
