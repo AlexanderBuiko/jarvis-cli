@@ -27,6 +27,8 @@ _PARAM_PARSERS: dict[str, Any] = {
     "solution_strategy": str,
     "context_strategy":  str,
     "window_size":       int,
+    "review_agents":     int,
+    "execution_agents":  int,
 }
 
 _PARAM_VALIDATORS: dict[str, tuple] = {
@@ -49,6 +51,20 @@ _PARAM_VALIDATORS: dict[str, tuple] = {
     "window_size": (
         lambda v: v >= 1,
         "window_size must be at least 1",
+    ),
+    # 1 = the single ValidatorAgent (default, current behaviour). >1 enables the
+    # validation swarm with that many reviewer perspectives; bounded to keep the
+    # per-turn token cost predictable (~N+1 calls).
+    "review_agents": (
+        lambda v: 1 <= v <= 5,
+        "review_agents must be between 1 and 5",
+    ),
+    # 1 = sequential execution (default, one step per turn). >1 lets the parallel
+    # executor run independent plan steps concurrently with that many agents,
+    # ordering dependent steps via the plan's [after: …] annotations.
+    "execution_agents": (
+        lambda v: 1 <= v <= 8,
+        "execution_agents must be between 1 and 8",
     ),
 }
 

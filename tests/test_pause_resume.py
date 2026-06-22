@@ -103,6 +103,15 @@ class StandaloneTaskTest(unittest.TestCase):
         _, agent = self._agent()
         self.assertIsNone(agent.exit_task())
 
+    def test_illegal_transition_is_handled_gracefully(self):
+        # An attempt to skip a stage (e.g. clarification -> done) must not crash the
+        # REPL: advance_to surfaces it as a clean None and the FSM stays put. (In
+        # normal flow the target always comes from a verdict, so this is defensive.)
+        _, agent = self._agent(_responder)
+        agent.create_task("demo")  # clarification
+        self.assertIsNone(agent.advance_to("done"))
+        self.assertEqual(agent.active_task["stage"], "clarification")
+
 
 if __name__ == "__main__":
     unittest.main()

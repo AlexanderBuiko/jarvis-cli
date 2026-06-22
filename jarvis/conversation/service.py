@@ -106,3 +106,16 @@ class ConversationService:
 
     def attachments(self) -> list[dict]:
         return list(self._state.attachments)
+
+    def purge_attachment(self, task_id: str) -> None:
+        """Remove a task's attachment from the active thread and every thread on
+        disk. Used when the task is deleted, so its result can't linger as a pinned
+        attachment anywhere. The active thread is updated in memory first (and saved)
+        so a later save() can't resurrect it; the store handles the rest."""
+        before = len(self._state.attachments)
+        self._state.attachments = [
+            a for a in self._state.attachments if a.get("task_id") != task_id
+        ]
+        if len(self._state.attachments) != before:
+            self.save()
+        self._threads.purge_attachment(task_id, skip_id=self._state.id)

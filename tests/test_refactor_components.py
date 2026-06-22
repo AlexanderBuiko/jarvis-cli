@@ -273,6 +273,39 @@ class AgentAttachmentFlowTest(unittest.TestCase):
         sent = " ".join(m["content"] for m in engine.calls[-1][0])
         self.assertIn("The answer is 42.", sent)
 
+    def test_delete_task_detaches_from_active_thread(self):
+        from jarvis.agent import JarvisAgent
+        engine = FakeEngine(scripted=["ok", "ok"])
+        agent = JarvisAgent(engine, ConfigManager())
+        agent.create_task("research")
+        agent.save_task_result("# Findings\nThe answer is 42.")
+        agent.attach_task("research")
+        agent.exit_task()
+        self.assertTrue(agent.list_attachments())
+
+        self.assertEqual(agent.delete_task("research"), "research")
+        # The attachment is gone, so the deliverable no longer enters chat context.
+        self.assertEqual(agent.list_attachments(), [])
+        agent.chat("what did we find?")
+        sent = " ".join(m["content"] for m in engine.calls[-1][0])
+        self.assertNotIn("The answer is 42.", sent)
+
+    def test_delete_task_detaches_from_other_threads(self):
+        from jarvis.agent import JarvisAgent
+        agent = JarvisAgent(FakeEngine(scripted=["ok"]), ConfigManager())
+        agent.create_task("research")
+        agent.save_task_result("# Findings\nThe answer is 42.")
+        agent.attach_task("research")   # pinned on the current thread
+        agent.exit_task()
+        original = agent.thread_name
+        # Move to a different thread, then delete the task from there.
+        agent.new_thread("other")
+        self.assertEqual(agent.list_attachments(), [])  # the new thread has none
+        agent.delete_task("research")
+        # The original thread's on-disk attachment must also be purged.
+        self.assertTrue(agent.load_thread(original))
+        self.assertEqual(agent.list_attachments(), [])
+
 
 class AgentEndToEndSmokeTest(unittest.TestCase):
     """The whole composition root still works end-to-end with a fake engine."""
