@@ -37,7 +37,8 @@ class InvariantChecker:
         invariant. Appends each LLM call to ``api_calls`` (preserving the caller's
         running index). Returns (final_text, notice_or_None, completion_for_finish_reason).
         """
-        check_prompt = build_invariant_check_prompt(invariants, response_text)
+        tool_context = _tool_context(messages)
+        check_prompt = build_invariant_check_prompt(invariants, response_text, tool_context)
         check_params = {"model": params["model"]} if "model" in params else {}
         check = self._gateway.complete(
             [{"role": "user", "content": check_prompt}], check_params,
@@ -56,11 +57,54 @@ class InvariantChecker:
             resolution_messages, params,
             label="invariant_resolution", api_calls=api_calls,
         )
-        notice = (
-            "[Invariant check: your request conflicted with the configured invariants — "
-            "the reply above was adjusted or declined to respect them.]"
+        final_text, notice = _interpret_resolution(resolution.text)
+        return final_text, notice, resolution
+
+
+def _interpret_resolution(text: str) -> tuple[str, str]:
+    """Split the resolution's CORRECTED:/REFUSED: tag from the reply and pick a notice.
+
+    A *correction* (the reply slipped and was rewritten) is a routine adjustment —
+    the shown reply already complies, so the note is calm and doesn't imply the
+    user's request was at fault. A *refusal* (the request truly conflicts) keeps the
+    stronger notice that names the conflict. Returns (reply_text, notice).
+    """
+    stripped = text.strip()
+    head, _, rest = stripped.partition("\n")
+    tag = head.strip().upper().rstrip(":")
+    body = rest.strip() or stripped
+
+    if tag == "CORRECTED":
+        return body, "[Note: the reply was adjusted to stay within your configured invariants.]"
+    if tag == "REFUSED":
+        return body, (
+            "[Invariant check: this request conflicts with your configured invariants — "
+            "the reply above declined it and offered an alternative.]"
         )
-        return resolution.text.strip(), notice, resolution
+    # No recognisable tag: fall back to the neutral combined notice on the full text.
+    return stripped, (
+        "[Invariant check: the reply was adjusted or declined to respect your configured invariants.]"
+    )
+
+
+def _tool_context(messages: list[dict]) -> str:
+    """Summarise this turn's tool calls and their results for the checker.
+
+    Reads the tool exchange the gateway appended to ``messages`` (assistant
+    messages carrying ``tool_calls`` and the ``tool`` result messages). Returns an
+    empty string when no tools were used, so non-tool turns are unaffected.
+    """
+    lines: list[str] = []
+    for m in messages:
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            for tc in m["tool_calls"]:
+                fn = tc.get("function", {})
+                args = fn.get("arguments", "")
+                lines.append(f"- called {fn.get('name', '?')}({args})")
+        elif m.get("role") == "tool":
+            content = (m.get("content") or "").strip()
+            lines.append(f"  → returned: {content}")
+    return "\n".join(lines)
 
 
 def _invariants_ok(verdict: str) -> bool:

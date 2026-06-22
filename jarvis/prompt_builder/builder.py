@@ -216,17 +216,35 @@ def build_strategy_prompt(params: dict[str, Any], user_request: str) -> str:
     return user_request
 
 
-def build_invariant_check_prompt(invariants: str, response_text: str) -> str:
+def build_invariant_check_prompt(
+    invariants: str, response_text: str, tool_context: str = ""
+) -> str:
     """Build the prompt that checks a reply against the invariant list.
 
     Acts as a "linter for requirements expressed in natural language": the model
     must answer with exactly OK when the reply violates nothing, or list the
     concrete violations otherwise.
+
+    ``tool_context`` lists any tools the assistant called this turn and what they
+    returned. Tool outputs are TRUSTED SOURCES, so facts grounded in them must not
+    be flagged as fabrication — without this, real tool-sourced data (e.g. live
+    weather) looks invented to a context-blind checker.
     """
+    tool_block = ""
+    if tool_context.strip():
+        tool_block = (
+            "TOOL ACTIVITY (the assistant called these tools; their outputs are TRUSTED "
+            "SOURCES — facts grounded in them are NOT fabrication, even if no source is "
+            f"named in the reply):\n{tool_context.strip()}\n\n"
+            "Faithful rounding, unit conversion, or natural rephrasing of these outputs is "
+            "compliant — do NOT flag it. Only flag statements that introduce facts NOT "
+            "supported by the tool outputs.\n\n"
+        )
     return (
         "You are a strict compliance checker. Below is a list of INVARIANTS (hard rules) and an "
         "ASSISTANT REPLY. Determine whether the reply violates any invariant.\n\n"
         f"INVARIANTS:\n{invariants.strip()}\n\n"
+        f"{tool_block}"
         f"ASSISTANT REPLY:\n{response_text.strip()}\n\n"
         "If the reply violates no invariant, respond with exactly: OK\n"
         "Otherwise, list each violation on its own line as '- <which invariant> : <how it is "
@@ -257,7 +275,9 @@ def build_invariant_resolution_prompt(invariants: str, response_text: str, viola
         "2. If the request CANNOT be fulfilled without breaking an invariant, DO NOT comply. "
         "Refuse clearly: state that you can't do it, name the specific invariant that blocks it, "
         "briefly explain the conflict, and propose an alternative that respects the invariants.\n\n"
-        "Output only the reply to show the user — no meta-commentary about this instruction.\n\n"
+        "Begin your output with a single tag on its own line: 'CORRECTED:' if you took option 1 "
+        "(rewrote a compliant answer), or 'REFUSED:' if you took option 2 (declined). After the "
+        "tag, output only the reply to show the user — no other meta-commentary.\n\n"
         f"INVARIANTS:\n{invariants.strip()}\n\n"
         f"VIOLATIONS FOUND:\n{violations.strip()}\n\n"
         f"YOUR PREVIOUS REPLY:\n{response_text.strip()}"

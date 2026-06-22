@@ -52,6 +52,12 @@ Commands
   session summary               Show aggregate session statistics with cost charts
   session api                   Show raw API request/response payloads
 
+  mcp list                      List MCP tools available to the agent each turn
+  mcp call <tool> [k=v ...]     Call an MCP tool directly (e.g. mcp call weather.get_weather city=London)
+
+  MCP tools are offered to the model automatically on every chat answer and task
+  stage; 'mcp' is for inspecting/calling them by hand.
+
   task                          Show the active task (working memory)
   task new [name]               Create a task workspace and enter it
   task list                     List all saved tasks and their stages
@@ -637,6 +643,69 @@ def handle_personalize(agent: JarvisAgent) -> str:
             return "profile.md updated (Style section only)."
         return "Could not update profile.md (no '## Style' section found)."
     return "Discarded — profile.md unchanged."
+
+
+# ── MCP (Model Context Protocol tools) ───────────────────────────────────────
+
+
+def handle_mcp(args: list[str], agent: JarvisAgent) -> str:
+    """Inspect and call MCP tools — a debug/ops view of the same fleet the agent uses.
+
+    `mcp list`                  → list every aggregated tool
+    `mcp call <tool> [k=v ...]` → invoke a tool and print its result
+
+    When the agent has a live tool provider (the normal case), these run against
+    that already-connected fleet. Otherwise they fall back to an ad-hoc connect so
+    the commands still work as a connectivity check. The agent calls these same
+    tools automatically each turn; this command is for inspecting them directly.
+    """
+    sub = args[0].lower() if args else "list"
+    provider = agent.tool_provider
+
+    try:
+        from ..mcp.cli import _parse_kwargs
+    except ImportError:
+        return "MCP support isn't installed. Run: pip install 'mcp>=1.8'"
+
+    try:
+        if provider is not None:
+            return _handle_mcp_live(sub, args, provider, _parse_kwargs)
+        return _handle_mcp_adhoc(sub, args, _parse_kwargs)
+    except Exception as exc:  # boundary: report, don't crash the REPL
+        return f"MCP error: {exc}"
+
+
+def _handle_mcp_live(sub, args, provider, parse_kwargs) -> str:
+    """Run against the agent's already-connected provider."""
+    if sub == "list":
+        tools = provider.tools()
+        lines = [f"✓ Live: {', '.join(provider.connected_servers) or '(none)'}"]
+        for server, err in provider.failures.items():
+            lines.append(f"✗ {server}: {err}")
+        lines += ["", f"Tools ({len(tools)}):"]
+        for t in tools:
+            summary = (t.description or "").splitlines()[0] if t.description else ""
+            lines.append(f"  • {t.qualified_name:<24} {summary}")
+        return "\n".join(lines)
+    if sub == "call":
+        if len(args) < 2:
+            return "Usage: mcp call <tool> [key=value ...]"
+        return provider.call_tool(args[1], parse_kwargs(args[2:]))
+    return "Usage: mcp list | mcp call <tool> [key=value ...]"
+
+
+def _handle_mcp_adhoc(sub, args, parse_kwargs) -> str:
+    """No live provider: open a throwaway connection for this command only."""
+    import asyncio
+    from ..mcp.cli import _list as mcp_list, _call as mcp_call
+
+    if sub == "list":
+        return asyncio.run(mcp_list())
+    if sub == "call":
+        if len(args) < 2:
+            return "Usage: mcp call <tool> [key=value ...]"
+        return asyncio.run(mcp_call(args[1], parse_kwargs(args[2:])))
+    return "Usage: mcp list | mcp call <tool> [key=value ...]"
 
 
 def handle_session_chat(session_store: SessionStore) -> str:

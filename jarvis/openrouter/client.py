@@ -27,6 +27,10 @@ class Completion(NamedTuple):
     request: dict        # exact payload sent to OpenRouter
     response: dict       # full raw response JSON from OpenRouter
     latency_ms: float    # wall-clock round-trip time in milliseconds
+    # OpenAI-format tool calls the model requested this turn, or None. Present
+    # only when the request offered tools and the model chose to call one; the
+    # gateway's tool loop executes them and re-calls until this is empty.
+    tool_calls: list[dict] | None = None
 
 
 class OpenRouterClient:
@@ -59,6 +63,7 @@ class OpenRouterClient:
             request=payload,
             response=data,
             latency_ms=latency_ms,
+            tool_calls=self._extract_tool_calls(data),
         )
 
     def get_context_window(self, model_id: str) -> int | None:
@@ -94,6 +99,11 @@ class OpenRouterClient:
         for field in ("temperature", "top_p", "max_tokens", "top_k", "seed"):
             if field in params and params[field] is not None:
                 payload[field] = params[field]
+        # Function-calling tools (injected by the gateway's tool loop). When
+        # present, let the model decide whether to call one.
+        if params.get("tools"):
+            payload["tools"] = params["tools"]
+            payload["tool_choice"] = params.get("tool_choice", "auto")
         return payload
 
     def _fetch_pricing(self) -> None:
@@ -161,9 +171,18 @@ class OpenRouterClient:
     @staticmethod
     def _extract_text(data: dict) -> str:
         try:
-            return data["choices"][0]["message"]["content"]
+            # content is null when the model returns only tool_calls — normalise
+            # to "" so callers can safely .strip() it.
+            return data["choices"][0]["message"].get("content") or ""
         except (KeyError, IndexError) as exc:
             raise RuntimeError(f"Unexpected API response shape: {data}") from exc
+
+    @staticmethod
+    def _extract_tool_calls(data: dict) -> list[dict] | None:
+        try:
+            return data["choices"][0]["message"].get("tool_calls") or None
+        except (KeyError, IndexError):
+            return None
 
     @staticmethod
     def _extract_finish_reason(data: dict) -> str | None:

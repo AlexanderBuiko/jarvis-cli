@@ -63,11 +63,18 @@ class JarvisAgent:
       topics        — automatic topic routing; context is scoped to the active topic
     """
 
-    def __init__(self, client: LLMEngine, config_manager: ConfigManager) -> None:
+    def __init__(
+        self,
+        client: LLMEngine,
+        config_manager: ConfigManager,
+        tool_provider=None,
+    ) -> None:
         # Every model call in the app flows through the single gateway (accounting,
         # and later retries/caching live there). Nothing below touches the engine
-        # directly any more.
-        self._gateway = LLMGateway(client)
+        # directly any more. The optional tool_provider (an MCPToolProvider) makes
+        # MCP tools available on tool-enabled calls (chat answers + stage turns).
+        self._tool_provider = tool_provider
+        self._gateway = LLMGateway(client, tool_provider=tool_provider)
         self._config = config_manager
         self._memory = MemoryCoordinator(self._gateway, config_manager)
         self._invariant_checker = InvariantChecker(self._gateway)
@@ -183,7 +190,9 @@ class JarvisAgent:
             + [{"role": "user", "content": final_user_message}]
         )
 
-        completion = self._gateway.complete(messages, params, label="final_answer", api_calls=api_calls)
+        completion = self._gateway.complete(
+            messages, params, label="final_answer", api_calls=api_calls, use_tools=True
+        )
         response_text = completion.text.strip()
 
         # Invariant validation (the "requirements linter"): when invariants are
@@ -543,3 +552,8 @@ class JarvisAgent:
     @property
     def session(self) -> SessionStore:
         return self._session
+
+    @property
+    def tool_provider(self):
+        """The live MCPToolProvider, or None when MCP tools aren't enabled."""
+        return self._tool_provider

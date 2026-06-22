@@ -73,7 +73,9 @@ class LLMStageRunner:
         )
 
         api_calls: list[dict] = []
-        completion = self._gateway.complete(messages, params, label="stage_turn", api_calls=api_calls)
+        completion = self._gateway.complete(
+            messages, params, label="stage_turn", api_calls=api_calls, use_tools=True
+        )
         response_text = completion.text.strip()
 
         if invariants:
