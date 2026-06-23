@@ -10,6 +10,27 @@ from .agent import JarvisAgent
 from .repl.loop import run_repl
 
 
+def _start_mcp():
+    """Connect the local MCP fleet so its tools are available each turn.
+
+    Best-effort: if the SDK isn't installed or the fleet won't start, Jarvis runs
+    normally without tools. Returns the provider (or None) and a status line.
+    """
+    try:
+        from .mcp.provider import MCPToolProvider
+    except ImportError:
+        return None, "MCP: not installed (chat/tasks run without tools)"
+    try:
+        provider = MCPToolProvider().start()
+    except Exception as exc:  # noqa: BLE001 — never block startup on MCP
+        return None, f"MCP: unavailable ({exc})"
+    tools = provider.tool_specs()
+    status = f"MCP: {len(tools)} tool(s) from {', '.join(provider.connected_servers) or 'no servers'}"
+    if provider.failures:
+        status += f"  ·  failed: {', '.join(provider.failures)}"
+    return provider, status
+
+
 def main() -> None:
     try:
         config_manager = ConfigManager()
@@ -18,8 +39,15 @@ def main() -> None:
         print(f"\n{exc}\n", file=sys.stderr)
         sys.exit(1)
 
-    agent = JarvisAgent(client, config_manager)
-    run_repl(agent, config_manager)
+    tool_provider, mcp_status = _start_mcp()
+    print(mcp_status)
+
+    agent = JarvisAgent(client, config_manager, tool_provider=tool_provider)
+    try:
+        run_repl(agent, config_manager)
+    finally:
+        if tool_provider is not None:
+            tool_provider.close()
 
 
 if __name__ == "__main__":

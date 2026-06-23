@@ -13,18 +13,27 @@ list so the caller's billing stays correct. Background/admin calls that are bill
 out of band can use ``record()`` to mint a record with an explicit index.
 """
 
+import json
 from typing import Any
 
 from .accounting import make_call_record
 from .engine import LLMEngine
 from ..openrouter.client import Completion
 
+# Safety cap on tool-call rounds in a single turn, so a model that keeps calling
+# tools can't loop forever.
+MAX_TOOL_ROUNDS = 6
+
 
 class LLMGateway:
     """The one place the rest of the system calls the model through."""
 
-    def __init__(self, engine: LLMEngine) -> None:
+    def __init__(self, engine: LLMEngine, tool_provider: Any | None = None) -> None:
         self._engine = engine
+        # Optional MCPToolProvider. Only calls that pass use_tools=True see tools,
+        # so background/utility calls (memory, invariants, personalisation) never
+        # get them. None → tool support is simply off.
+        self._tool_provider = tool_provider
 
     def complete(
         self,
@@ -33,15 +42,77 @@ class LLMGateway:
         *,
         label: str | None = None,
         api_calls: list[dict] | None = None,
+        use_tools: bool = False,
     ) -> Completion:
         """Run a completion. When ``api_calls`` is given, append an accounting
-        record (indexed sequentially) labelled ``label``."""
-        completion = self._engine.complete(messages, params)
+        record (indexed sequentially) labelled ``label``.
+
+        When ``use_tools`` is set and a tool provider is attached, the model is
+        offered the MCP tool catalogue and any tool calls it makes are executed
+        and fed back, looping until it returns a final answer (or the round cap).
+        Every model call in the loop is billed via ``api_calls``.
+        """
+        tool_specs = (
+            self._tool_provider.tool_specs()
+            if (use_tools and self._tool_provider is not None)
+            else None
+        )
+        if not tool_specs:
+            completion = self._engine.complete(messages, params)
+            self._maybe_record(api_calls, label, completion)
+            return completion
+        return self._complete_with_tools(messages, params, tool_specs, label, api_calls)
+
+    def _complete_with_tools(
+        self,
+        messages: list[dict],
+        params: dict[str, Any],
+        tool_specs: list[dict],
+        label: str | None,
+        api_calls: list[dict] | None,
+    ) -> Completion:
+        # Append the tool exchange to the caller's own ``messages`` list so that
+        # downstream consumers (notably the invariant checker) can see that facts
+        # were tool-sourced. Each engine call is given a *snapshot* (list(messages))
+        # so the recorded request payload is frozen at that moment rather than
+        # mutating as later rounds append to the shared list.
+        call_params = {**params, "tools": tool_specs}
+        completion: Completion | None = None
+        for _ in range(MAX_TOOL_ROUNDS):
+            completion = self._engine.complete(list(messages), call_params)
+            self._maybe_record(api_calls, label or "completion", completion)
+            if not completion.tool_calls:
+                return completion
+            # Echo the assistant's tool-call message, then append each tool result.
+            messages.append({
+                "role": "assistant",
+                "content": completion.text or None,
+                "tool_calls": completion.tool_calls,
+            })
+            for call in completion.tool_calls:
+                messages.append(self._run_tool_call(call))
+        # Round cap hit: return the last completion as-is.
+        return completion  # type: ignore[return-value]
+
+    def _run_tool_call(self, call: dict) -> dict:
+        """Execute one tool call via the provider; return its 'tool' result message."""
+        fn = call.get("function", {})
+        name = fn.get("name", "")
+        try:
+            args = json.loads(fn.get("arguments") or "{}")
+        except json.JSONDecodeError:
+            args = {}
+        try:
+            content = self._tool_provider.call_tool(name, args)
+        except Exception as exc:  # noqa: BLE001 — report back to the model, don't crash the turn
+            content = f"Tool '{name}' failed: {exc}"
+        return {"role": "tool", "tool_call_id": call.get("id", ""), "content": content}
+
+    def _maybe_record(self, api_calls: list[dict] | None, label: str | None, completion: Completion) -> None:
         if api_calls is not None:
             api_calls.append(
                 make_call_record(len(api_calls) + 1, label or "completion", completion, self._engine)
             )
-        return completion
 
     def record(self, index: int, label: str, completion: Completion) -> dict:
         """Mint an accounting record for a completion the caller bills separately."""
