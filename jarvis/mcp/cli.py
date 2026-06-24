@@ -18,7 +18,7 @@ import asyncio
 import json
 import sys
 
-from .config import DEFAULT_SERVERS
+from .config import default_servers
 from .registry import MCPRegistry
 
 
@@ -51,7 +51,7 @@ def _render_content(result) -> str:
 
 
 async def _list() -> str:
-    async with MCPRegistry(DEFAULT_SERVERS) as reg:
+    async with MCPRegistry(default_servers()) as reg:
         lines = [f"✓ Connected: {', '.join(reg.connected_servers) or '(none)'}"]
         for server, err in reg.failures.items():
             lines.append(f"✗ {server}: {err}")
@@ -65,7 +65,7 @@ async def _list() -> str:
 
 
 async def _call(tool: str, kwargs: dict) -> str:
-    async with MCPRegistry(DEFAULT_SERVERS) as reg:
+    async with MCPRegistry(default_servers()) as reg:
         if reg.failures:
             fails = "; ".join(f"{s}: {e}" for s, e in reg.failures.items())
             print(f"Warning — some servers failed: {fails}", file=sys.stderr)

@@ -32,6 +32,14 @@ def _start_mcp():
 
 
 def main() -> None:
+    # Load ~/.jarvis/.env and ./.env before anything reads the environment, so
+    # OPENROUTER_API_KEY / JARVIS_TIME_MCP_URL etc. come from config files and
+    # need not be re-exported each run. Real env vars still take precedence.
+    from .config.env_file import load_env_files
+    applied = load_env_files()
+    if applied:
+        print(f"Config: loaded {', '.join(applied)}")
+
     try:
         config_manager = ConfigManager()
         client = OpenRouterClient()
