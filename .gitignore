@@ -16,6 +16,9 @@ env/
 # Jarvis user config
 .jarvis/
 
+# Local secrets / config (never commit). .env.example is the committed template.
+.env
+
 # IDE
 .idea/
 .vscode/

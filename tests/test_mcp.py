@@ -11,9 +11,11 @@ The bridge and collision logic are tested without a connection.
 
 import asyncio
 import unittest
+import unittest.mock
 
 from jarvis.mcp import DEFAULT_SERVERS, MCPRegistry
 from jarvis.mcp.bridge import tools_to_openrouter
+from jarvis.mcp.client import MCPConnectionError
 from jarvis.mcp.registry import AggregatedTool, MCPRegistry as Registry
 
 
@@ -56,6 +58,93 @@ class MCPRegistryLiveTest(unittest.TestCase):
                 await reg.call_tool("weather.nope", {})
         with self.assertRaises(KeyError):
             _run(scenario())
+
+
+class NetworkTransportDegradationTest(unittest.TestCase):
+    """A down network server must degrade gracefully, not crash the fleet."""
+
+    def test_down_http_server_is_skipped_weather_survives(self):
+        from jarvis.mcp.config import STREAMABLE_HTTP, MCPServerConfig
+
+        # Port 9 (discard) refuses MCP — a stand-in for "server not running".
+        configs = [
+            MCPServerConfig(name="weather", args=["-m", "jarvis.mcp.servers.weather"]),
+            MCPServerConfig(name="time", transport=STREAMABLE_HTTP,
+                            url="http://127.0.0.1:9/mcp"),
+        ]
+
+        async def scenario():
+            async with MCPRegistry(configs) as reg:
+                names = {t.qualified_name for t in await reg.list_tools()}
+                return reg.connected_servers, dict(reg.failures), names
+
+        connected, failures, names = _run(scenario())
+        # Weather (stdio) stays up; the unreachable HTTP server is recorded, not fatal.
+        self.assertEqual(connected, ["weather"])
+        self.assertIn("time", failures)
+        self.assertIn("weather.get_weather", names)
+        self.assertNotIn("time.get_current_time", names)
+
+
+class NetworkPreflightTest(unittest.TestCase):
+    """The auth-aware preflight classifies down / unauthorized / reachable."""
+
+    def _client(self, *, api_key_env=None):
+        from jarvis.mcp.client import MCPClient
+        from jarvis.mcp.config import STREAMABLE_HTTP, MCPServerConfig
+        return MCPClient(MCPServerConfig(
+            name="time", transport=STREAMABLE_HTTP,
+            url="http://server.invalid/mcp", api_key_env=api_key_env,
+        ))
+
+    def _patch_httpx(self, status=None, raises=None):
+        import httpx
+
+        class _Resp:
+            def __init__(self, code): self.status_code = code
+
+        class _FakeClient:
+            def __init__(self, *a, **k): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+            async def post(self, url, content=None, headers=None):
+                if raises is not None:
+                    raise raises
+                return _Resp(status)
+
+        return unittest.mock.patch.object(httpx, "AsyncClient", _FakeClient)
+
+    def test_401_is_unauthorized(self):
+        with self._patch_httpx(status=401):
+            with self.assertRaises(MCPConnectionError) as ctx:
+                _run(self._client()._preflight())
+        self.assertIn("unauthorized", str(ctx.exception).lower())
+
+    def test_connection_error_is_unreachable(self):
+        import httpx
+        with self._patch_httpx(raises=httpx.ConnectError("refused")):
+            with self.assertRaises(MCPConnectionError) as ctx:
+                _run(self._client()._preflight())
+        self.assertIn("unreachable", str(ctx.exception).lower())
+
+    def test_400_means_reachable_and_authed(self):
+        # 400 "missing session id" = server accepted the key; preflight must pass.
+        with self._patch_httpx(status=400):
+            _run(self._client()._preflight())  # no raise
+
+
+class NetworkConfigValidationTest(unittest.TestCase):
+    """Network transports must declare a url."""
+
+    def test_http_without_url_is_rejected(self):
+        from jarvis.mcp.config import STREAMABLE_HTTP, MCPServerConfig
+        with self.assertRaises(ValueError):
+            MCPServerConfig(name="time", transport=STREAMABLE_HTTP)
+
+    def test_unknown_transport_is_rejected(self):
+        from jarvis.mcp.config import MCPServerConfig
+        with self.assertRaises(ValueError):
+            MCPServerConfig(name="x", transport="carrier-pigeon", url="http://x")
 
 
 class CollisionAndBridgeTest(unittest.TestCase):

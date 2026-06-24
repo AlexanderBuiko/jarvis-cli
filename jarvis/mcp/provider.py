@@ -29,7 +29,7 @@ import threading
 from typing import Any
 
 from .cli import _render_result
-from .config import DEFAULT_SERVERS, MCPServerConfig
+from .config import default_servers, MCPServerConfig
 from .client import MCPConnectionError
 from .registry import AggregatedTool, MCPRegistry
 from .bridge import to_wire_name, tools_to_openrouter
@@ -50,7 +50,7 @@ class MCPToolProvider:
         ready_timeout: float = DEFAULT_READY_TIMEOUT_S,
         call_timeout: float = DEFAULT_CALL_TIMEOUT_S,
     ) -> None:
-        self._configs = configs if configs is not None else DEFAULT_SERVERS
+        self._configs = configs if configs is not None else default_servers()
         self._ready_timeout = ready_timeout
         self._call_timeout = call_timeout
 
