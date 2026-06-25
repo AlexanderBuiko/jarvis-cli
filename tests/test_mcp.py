@@ -292,6 +292,99 @@ class GatewayToolLoopTest(unittest.TestCase):
         self.assertEqual([m["role"] for m in first_call_messages], ["user"])
 
 
+class _PipelineEngine:
+    """Fake engine that drives the weather-anomaly chain A→B→C.
+
+    On each turn it looks at how many tool results have come back and emits the
+    next tool call, relaying the *previous* tool's output forward as the argument —
+    exactly how a real model chains get_weather_readings → detect_weather_anomalies
+    → send_telegram_alert. After the third result it returns a final answer.
+    """
+
+    _CHAIN = [
+        ("jarvis__get_weather_readings", "city"),       # round 1: no prior output
+        ("jarvis__detect_weather_anomalies", "weather_report"),
+        ("jarvis__send_telegram_alert", "anomaly_report"),
+    ]
+
+    def __init__(self):
+        self.calls = []
+
+    def complete(self, messages, params):
+        from jarvis.openrouter.client import Completion
+        self.calls.append((messages, params))
+        tool_msgs = [m for m in messages if m.get("role") == "tool"]
+        step = len(tool_msgs)
+        if step >= len(self._CHAIN):
+            return Completion(text="Alert sent for Tokyo.", finish_reason="stop",
+                              request={}, response={}, latency_ms=0.0, tool_calls=None)
+        name, arg_key = self._CHAIN[step]
+        # Relay the previous tool's output as this call's argument (data transfer).
+        prior = tool_msgs[-1]["content"] if tool_msgs else "Tokyo"
+        import json as _json
+        args = _json.dumps({arg_key: prior})
+        return Completion(
+            text="", finish_reason="stop", request={}, response={}, latency_ms=0.0,
+            tool_calls=[{"id": f"call_{step}", "type": "function",
+                         "function": {"name": name, "arguments": args}}],
+        )
+
+    def get_pricing(self, _):
+        return (None, None)
+
+    def get_context_window(self, _):
+        return None
+
+
+class _PipelineProvider:
+    """Canned pipeline tool outputs; records the call order and relayed args."""
+
+    def __init__(self):
+        self.called = []
+
+    def tool_specs(self):
+        return [{"type": "function", "function": {"name": n, "description": "",
+                 "parameters": {"type": "object"}}}
+                for n in ("jarvis__get_weather_readings",
+                          "jarvis__detect_weather_anomalies",
+                          "jarvis__send_telegram_alert")]
+
+    def call_tool(self, name, args):
+        self.called.append((name, args))
+        if name == "jarvis__get_weather_readings":
+            return '{"report_type": "weather_readings.v1", "city": "Tokyo", "daily": []}'
+        if name == "jarvis__detect_weather_anomalies":
+            return '{"city": "Tokyo", "anomaly_count": 1, "anomalies": [{"type": "rapid_temperature_drop"}]}'
+        if name == "jarvis__send_telegram_alert":
+            return '{"sent": true, "anomaly_count": 1}'
+        raise KeyError(name)
+
+
+class PipelineChainingTest(unittest.TestCase):
+    """jarvis-cli chains the three pipeline tools and relays data between them."""
+
+    def test_three_tool_chain_executes_in_order(self):
+        from jarvis.llm.gateway import LLMGateway
+        engine, provider = _PipelineEngine(), _PipelineProvider()
+        gw = LLMGateway(engine, tool_provider=provider)
+        calls = []
+        completion = gw.complete(
+            [{"role": "user", "content": "Analyze Tokyo weather for the last week; "
+                                         "alert me if it's unusual."}],
+            {}, label="answer", api_calls=calls, use_tools=True,
+        )
+        order = [name for name, _ in provider.called]
+        self.assertEqual(order, ["jarvis__get_weather_readings",
+                                 "jarvis__detect_weather_anomalies",
+                                 "jarvis__send_telegram_alert"])
+        # Data transfer: detect received the readings report; alert received the
+        # anomaly report (each call's arg is the previous tool's output).
+        self.assertIn("weather_readings.v1", provider.called[1][1]["weather_report"])
+        self.assertIn("anomaly_count", provider.called[2][1]["anomaly_report"])
+        self.assertEqual(completion.text, "Alert sent for Tokyo.")
+        self.assertEqual(len(calls), 4)  # 3 tool rounds + final answer, all billed
+
+
 class InvariantToolContextTest(unittest.TestCase):
     """Tool-sourced facts must not be flagged as fabrication."""
 
