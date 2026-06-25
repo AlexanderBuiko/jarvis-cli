@@ -20,14 +20,14 @@ class ParseTest(unittest.TestCase):
                 "# a comment",
                 "",
                 "OPENROUTER_API_KEY=abc123",
-                "export JARVIS_TIME_MCP_URL=http://localhost:8080/mcp",
+                "export JARVIS_MCP_URL=http://localhost:8080/mcp",
                 'QUOTED="spaced value"',
                 "  SPACED  =  trimmed  ",
                 "no_equals_line_ignored",
             ]))
             pairs = dict(_parse(path))
         self.assertEqual(pairs["OPENROUTER_API_KEY"], "abc123")
-        self.assertEqual(pairs["JARVIS_TIME_MCP_URL"], "http://localhost:8080/mcp")
+        self.assertEqual(pairs["JARVIS_MCP_URL"], "http://localhost:8080/mcp")
         self.assertEqual(pairs["QUOTED"], "spaced value")
         self.assertEqual(pairs["SPACED"], "trimmed")
         self.assertNotIn("no_equals_line_ignored", pairs)

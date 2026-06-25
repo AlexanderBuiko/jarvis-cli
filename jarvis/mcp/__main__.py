@@ -1,7 +1,7 @@
 """Entry point: ``python -m jarvis.mcp`` → the MCP CLI."""
 
 # Load .env files *before* importing cli/config — config.py reads
-# JARVIS_TIME_MCP_URL at import time, so the env must be populated first.
+# JARVIS_MCP_URL at import time, so the env must be populated first.
 from ..config.env_file import load_env_files
 
 load_env_files()

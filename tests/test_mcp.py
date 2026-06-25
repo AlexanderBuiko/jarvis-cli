@@ -1,10 +1,11 @@
 """
 Tests for the MCP integration (jarvis.mcp).
 
-These drive the *real* local weather server over stdio — the same path the CLI
-uses — so they exercise the full SDK handshake, tool discovery, namespaced
-routing and graceful teardown end to end. No network is required: get_weather
-falls back to deterministic mock data when offline, and echo is fully local.
+The live tests drive a small **stdio fixture server** (tests/stdio_server.py) over
+the same path the CLI uses — exercising the full SDK handshake, tool discovery,
+namespaced routing and graceful teardown end to end. No network is required: the
+fixture's echo/ping tools are fully local. (The product ships no local stdio
+server; the standalone network server is the single source of real tools.)
 
 The bridge and collision logic are tested without a connection.
 """
@@ -13,10 +14,14 @@ import asyncio
 import unittest
 import unittest.mock
 
-from jarvis.mcp import DEFAULT_SERVERS, MCPRegistry
+from jarvis.mcp import MCPRegistry
 from jarvis.mcp.bridge import tools_to_openrouter
 from jarvis.mcp.client import MCPConnectionError
+from jarvis.mcp.config import MCPServerConfig
 from jarvis.mcp.registry import AggregatedTool, MCPRegistry as Registry
+
+# The stdio fixture server, launched as a subprocess for the live tests.
+FIXTURE_SERVERS = [MCPServerConfig(name="fixture", args=["-m", "tests.stdio_server"])]
 
 
 def _run(coro):
@@ -24,38 +29,37 @@ def _run(coro):
 
 
 class MCPRegistryLiveTest(unittest.TestCase):
-    """End-to-end against the local weather stdio server."""
+    """End-to-end against the stdio fixture server."""
 
     def test_connect_and_list_tools(self):
         async def scenario():
-            async with MCPRegistry(DEFAULT_SERVERS) as reg:
-                self.assertEqual(reg.connected_servers, ["weather"])
+            async with MCPRegistry(FIXTURE_SERVERS) as reg:
+                self.assertEqual(reg.connected_servers, ["fixture"])
                 self.assertEqual(reg.failures, {})
                 names = {t.qualified_name for t in await reg.list_tools()}
                 return names
         names = _run(scenario())
-        self.assertIn("weather.get_weather", names)
-        self.assertIn("weather.echo", names)
+        self.assertIn("fixture.echo", names)
+        self.assertIn("fixture.ping", names)
 
     def test_call_echo_roundtrip(self):
         async def scenario():
-            async with MCPRegistry(DEFAULT_SERVERS) as reg:
-                result = await reg.call_tool("weather.echo", {"text": "ping"})
+            async with MCPRegistry(FIXTURE_SERVERS) as reg:
+                result = await reg.call_tool("fixture.echo", {"text": "ping"})
                 return result.content[0].text
         self.assertEqual(_run(scenario()), "ping")
 
-    def test_call_weather_returns_text(self):
+    def test_call_bare_name_returns_text(self):
         async def scenario():
-            async with MCPRegistry(DEFAULT_SERVERS) as reg:
-                result = await reg.call_tool("get_weather", {"city": "London"})
+            async with MCPRegistry(FIXTURE_SERVERS) as reg:
+                result = await reg.call_tool("ping", {})  # unambiguous bare name
                 return result.content[0].text
-        text = _run(scenario())
-        self.assertIn("London", text)
+        self.assertEqual(_run(scenario()), "pong")
 
     def test_unknown_tool_raises(self):
         async def scenario():
-            async with MCPRegistry(DEFAULT_SERVERS) as reg:
-                await reg.call_tool("weather.nope", {})
+            async with MCPRegistry(FIXTURE_SERVERS) as reg:
+                await reg.call_tool("fixture.nope", {})
         with self.assertRaises(KeyError):
             _run(scenario())
 
@@ -63,13 +67,13 @@ class MCPRegistryLiveTest(unittest.TestCase):
 class NetworkTransportDegradationTest(unittest.TestCase):
     """A down network server must degrade gracefully, not crash the fleet."""
 
-    def test_down_http_server_is_skipped_weather_survives(self):
-        from jarvis.mcp.config import STREAMABLE_HTTP, MCPServerConfig
+    def test_down_http_server_is_skipped_stdio_survives(self):
+        from jarvis.mcp.config import STREAMABLE_HTTP
 
         # Port 9 (discard) refuses MCP — a stand-in for "server not running".
         configs = [
-            MCPServerConfig(name="weather", args=["-m", "jarvis.mcp.servers.weather"]),
-            MCPServerConfig(name="time", transport=STREAMABLE_HTTP,
+            MCPServerConfig(name="fixture", args=["-m", "tests.stdio_server"]),
+            MCPServerConfig(name="jarvis", transport=STREAMABLE_HTTP,
                             url="http://127.0.0.1:9/mcp"),
         ]
 
@@ -79,11 +83,11 @@ class NetworkTransportDegradationTest(unittest.TestCase):
                 return reg.connected_servers, dict(reg.failures), names
 
         connected, failures, names = _run(scenario())
-        # Weather (stdio) stays up; the unreachable HTTP server is recorded, not fatal.
-        self.assertEqual(connected, ["weather"])
-        self.assertIn("time", failures)
-        self.assertIn("weather.get_weather", names)
-        self.assertNotIn("time.get_current_time", names)
+        # The stdio fixture stays up; the unreachable HTTP server is recorded, not fatal.
+        self.assertEqual(connected, ["fixture"])
+        self.assertIn("jarvis", failures)
+        self.assertIn("fixture.echo", names)
+        self.assertNotIn("jarvis.get_current_time", names)
 
 
 class NetworkPreflightTest(unittest.TestCase):

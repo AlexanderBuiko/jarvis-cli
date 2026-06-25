@@ -4,9 +4,9 @@ A tiny CLI front-end for the MCP layer — the Phase 2 proof-of-concept.
     python -m jarvis.mcp list                 # connect, list every tool
     python -m jarvis.mcp call <tool> k=v ...  # call a tool, print its result
 
-It connects the default local fleet (see config.DEFAULT_SERVERS) through the
-async :class:`MCPRegistry`, but exposes a plain synchronous command interface so
-it drops into the existing REPL/command style without forcing async on callers.
+It connects the configured fleet (see config.default_servers) through the async
+:class:`MCPRegistry`, but exposes a plain synchronous command interface so it
+drops into the existing REPL/command style without forcing async on callers.
 
 Arguments to ``call`` are given as ``key=value`` pairs; values are parsed as JSON
 when possible (so ``count=3`` is an int) and otherwise kept as strings.

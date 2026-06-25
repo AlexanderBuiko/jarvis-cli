@@ -17,7 +17,7 @@ environment.
 Format: ``KEY=value`` per line. Blank lines and ``#`` comments are ignored; an
 optional leading ``export`` is allowed; surrounding single/double quotes are
 stripped. This is a generic env file, not a fixed schema — any key is loaded
-(e.g. OPENROUTER_API_KEY, JARVIS_TIME_MCP_URL, MCP_API_KEY).
+(e.g. OPENROUTER_API_KEY, JARVIS_MCP_URL, MCP_API_KEY).
 """
 
 from __future__ import annotations
