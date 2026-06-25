@@ -64,33 +64,40 @@ class MCPServerConfig:
             raise ValueError(f"{self.name}: unknown transport {self.transport!r}")
 
 
-# The static base fleet: the stdio weather server is always present (and is what
-# the test suite drives via this constant).
-DEFAULT_SERVERS: list[MCPServerConfig] = [
-    MCPServerConfig(
-        name="weather",
-        args=["-m", "jarvis.mcp.servers.weather"],
-    ),
-]
+# The remote server's namespace prefix. Every tool it exposes is surfaced to the
+# rest of Jarvis as ``jarvis.<tool>`` (e.g. ``jarvis.get_weather_digest``), which
+# is why the standalone server hosts time *and* weather tools under one name.
+REMOTE_SERVER_NAME = "jarvis"
+
+# Env vars carrying the remote server's URL. JARVIS_MCP_URL is the current name;
+# JARVIS_TIME_MCP_URL is still honoured so existing ~/.jarvis/.env files keep
+# working (it pre-dates the server growing beyond time).
+REMOTE_URL_ENV = "JARVIS_MCP_URL"
+REMOTE_URL_ENV_LEGACY = "JARVIS_TIME_MCP_URL"
+
+# There is no local fleet any more: the standalone network server is the single
+# source of MCP tools. Kept (empty) for the public API and tests that build on it.
+DEFAULT_SERVERS: list[MCPServerConfig] = []
 
 
 def default_servers() -> list[MCPServerConfig]:
     """Build the active fleet, reading the environment *at call time*.
 
     Env is read here — not at import — so it reflects values loaded from .env
-    files at startup (see jarvis.config.env_file). A network server such as the
-    standalone time server is wired in *explicitly* by setting JARVIS_TIME_MCP_URL;
-    unset → weather-only. If a configured server is down the registry records the
-    failure and the rest of the fleet stays up (see registry.MCPRegistry).
+    files at startup (see jarvis.config.env_file). The standalone Jarvis MCP
+    server is wired in *explicitly* by setting JARVIS_MCP_URL (or the legacy
+    JARVIS_TIME_MCP_URL); unset → no MCP tools. If the configured server is down
+    the registry records the failure rather than crashing (see MCPRegistry).
     """
     servers = list(DEFAULT_SERVERS)
-    time_url = os.environ.get("JARVIS_TIME_MCP_URL", "").strip()
-    if time_url:
+    url = (os.environ.get(REMOTE_URL_ENV, "").strip()
+           or os.environ.get(REMOTE_URL_ENV_LEGACY, "").strip())
+    if url:
         servers.append(
             MCPServerConfig(
-                name="time",
+                name=REMOTE_SERVER_NAME,
                 transport=STREAMABLE_HTTP,
-                url=time_url,
+                url=url,
                 api_key_env="MCP_API_KEY",  # unset locally → no header sent (server open)
             )
         )
