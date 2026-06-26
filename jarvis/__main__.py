@@ -49,6 +49,10 @@ def main() -> None:
 
     tool_provider, mcp_status = _start_mcp()
     print(mcp_status)
+    if tool_provider is not None:
+        # Route the gateway's per-call tool trace to a tidy post-turn block.
+        from .repl.tool_trace import install as install_tool_trace
+        install_tool_trace()
 
     agent = JarvisAgent(client, config_manager, tool_provider=tool_provider)
     try:

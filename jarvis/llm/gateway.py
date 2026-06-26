@@ -33,6 +33,19 @@ MAX_TOOL_ROUNDS = 12
 # How much of a tool result to show in the trace line (full result still goes to
 # the model). Keeps the trace readable when a tool returns a large JSON blob.
 _TRACE_PREVIEW_CHARS = 200
+# Per-argument value length in the trace, so a relayed report/blob doesn't bloat it.
+_TRACE_ARG_CHARS = 40
+
+
+def _compact_args(args: dict) -> str:
+    """Render call args as ``k=v, …`` with each value truncated, for the trace."""
+    parts = []
+    for key, value in (args or {}).items():
+        text = " ".join(str(value).split())
+        if len(text) > _TRACE_ARG_CHARS:
+            text = text[:_TRACE_ARG_CHARS] + "…"
+        parts.append(f"{key}={text}")
+    return ", ".join(parts)
 
 
 class LLMGateway:
@@ -119,12 +132,14 @@ class LLMGateway:
         except json.JSONDecodeError:
             args = {}
         server = self._server_for(name)
+        bare = name.split("__", 1)[-1]  # drop the wire-name server prefix for display
         try:
             content = self._tool_provider.call_tool(name, args)
         except Exception as exc:  # noqa: BLE001 — report back to the model, don't crash the turn
             content = f"Tool '{name}' failed: {exc}"
         preview = " ".join(str(content).split())[:_TRACE_PREVIEW_CHARS]
-        tool_logger.info("[#%d] %s.%s args=%s → %s", order, server, name, args, preview)
+        tool_logger.info("[%d] %s.%s(%s) → %s",
+                         order, server, bare, _compact_args(args), preview)
         return {"role": "tool", "tool_call_id": call.get("id", ""), "content": content}
 
     def _server_for(self, name: str) -> str:

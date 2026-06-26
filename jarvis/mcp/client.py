@@ -44,6 +44,7 @@ class MCPClient:
         self.config = config
         self._session: ClientSession | None = None
         self._stack: AsyncExitStack | None = None
+        self._errlog = None  # stdio subprocess stderr sink (opened on connect)
 
     @property
     def name(self) -> str:
@@ -91,14 +92,25 @@ class MCPClient:
                 sse_client(self.config.url, headers=self._auth_headers())
             )
             return read, write
-        # Default: stdio subprocess.
+        # Default: stdio subprocess. A stdio MCP server logs to *its* stderr, which
+        # the SDK forwards to ``errlog`` (default sys.stderr) — that's the startup
+        # banner / per-request noise that otherwise floods the REPL. Send it to a
+        # log file (JARVIS_MCP_LOG) or, by default, discard it; MCP traffic itself
+        # rides stdout and is unaffected.
         params = StdioServerParameters(
             command=self.config.command,
             args=self.config.args,
             env=self.config.env or None,
         )
-        read, write = await stack.enter_async_context(stdio_client(params))
+        self._errlog = self._open_errlog()
+        read, write = await stack.enter_async_context(stdio_client(params, errlog=self._errlog))
         return read, write
+
+    @staticmethod
+    def _open_errlog():
+        """Where a stdio server's stderr goes: a JARVIS_MCP_LOG file, else devnull."""
+        path = os.environ.get("JARVIS_MCP_LOG", "").strip()
+        return open(path, "a", encoding="utf-8") if path else open(os.devnull, "w")
 
     async def _preflight(self) -> None:
         """Fail fast — before opening a real MCP connection — if a network server
@@ -181,6 +193,12 @@ class MCPClient:
             await self._stack.aclose()
         self._stack = None
         self._session = None
+        if self._errlog is not None:
+            try:
+                self._errlog.close()
+            except Exception:  # noqa: BLE001 — closing the log sink must never raise
+                pass
+            self._errlog = None
 
     async def __aenter__(self) -> "MCPClient":
         return await self.connect()

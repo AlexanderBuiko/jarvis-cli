@@ -538,11 +538,11 @@ class MultiServerFlowTest(unittest.TestCase):
         self.assertEqual(len(provider.routed), 8)
         self.assertEqual(completion.text, "Summary sent.")
         self.assertEqual(len(api_calls), 9)
-        # Trace shows order index + target server for each call.
+        # Trace shows order index + target server + bare tool name for each call.
         joined = "\n".join(logs.output)
-        self.assertIn("[#1] jarvis.jarvis__get_weather_readings", joined)
-        self.assertIn("[#6] wikipedia.wikipedia__get_summary", joined)
-        self.assertIn("[#8] jarvis.jarvis__send_telegram_alert", joined)
+        self.assertIn("[1] jarvis.get_weather_readings(", joined)
+        self.assertIn("[6] wikipedia.get_summary(", joined)
+        self.assertIn("[8] jarvis.send_telegram_alert(", joined)
 
     def test_flow_exceeds_old_six_round_cap(self):
         # Regression guard: the 8-step flow would have been truncated at the old

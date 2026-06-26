@@ -73,7 +73,7 @@ Set only what you want to change.
 
 | Parameter | Type | Description |
 |---|---|---|
-| `model` | str | OpenRouter model identifier. Default: `google/gemini-2.0-flash-001` (cheap + reliable tool-calling for long flows) |
+| `model` | str | OpenRouter model identifier. Default: `google/gemini-2.5-flash` (cheap + reliable tool-calling for long flows) |
 | `temperature` | float 0.0–2.0 | Sampling temperature |
 | `top_p` | float 0.0–1.0 | Nucleus sampling probability |
 | `top_k` | int | Top-k sampling cutoff |
