@@ -14,15 +14,25 @@ out of band can use ``record()`` to mint a record with an explicit index.
 """
 
 import json
+import logging
 from typing import Any
 
 from .accounting import make_call_record
 from .engine import LLMEngine
 from ..openrouter.client import Completion
 
+# Per-call tool trace (selected tool, target server, call order, result). Surfaced
+# at INFO so a demo/E2E run can show cross-server routing; quiet by default.
+tool_logger = logging.getLogger("jarvis.tools")
+
 # Safety cap on tool-call rounds in a single turn, so a model that keeps calling
-# tools can't loop forever.
-MAX_TOOL_ROUNDS = 6
+# tools can't loop forever. Sized for long cross-server flows (the multi-server
+# demo chains ~8 dependent calls across 3 servers, one per round).
+MAX_TOOL_ROUNDS = 12
+
+# How much of a tool result to show in the trace line (full result still goes to
+# the model). Keeps the trace readable when a tool returns a large JSON blob.
+_TRACE_PREVIEW_CHARS = 200
 
 
 class LLMGateway:
@@ -78,6 +88,7 @@ class LLMGateway:
         # mutating as later rounds append to the shared list.
         call_params = {**params, "tools": tool_specs}
         completion: Completion | None = None
+        call_index = 0  # running order across rounds, for the trace
         for _ in range(MAX_TOOL_ROUNDS):
             completion = self._engine.complete(list(messages), call_params)
             self._maybe_record(api_calls, label or "completion", completion)
@@ -90,23 +101,41 @@ class LLMGateway:
                 "tool_calls": completion.tool_calls,
             })
             for call in completion.tool_calls:
-                messages.append(self._run_tool_call(call))
+                call_index += 1
+                messages.append(self._run_tool_call(call, call_index))
         # Round cap hit: return the last completion as-is.
         return completion  # type: ignore[return-value]
 
-    def _run_tool_call(self, call: dict) -> dict:
-        """Execute one tool call via the provider; return its 'tool' result message."""
+    def _run_tool_call(self, call: dict, order: int = 0) -> dict:
+        """Execute one tool call via the provider; return its 'tool' result message.
+
+        Emits a trace line — order index, target server, tool, and a result preview
+        — so a multi-server run shows which server each call was routed to.
+        """
         fn = call.get("function", {})
         name = fn.get("name", "")
         try:
             args = json.loads(fn.get("arguments") or "{}")
         except json.JSONDecodeError:
             args = {}
+        server = self._server_for(name)
         try:
             content = self._tool_provider.call_tool(name, args)
         except Exception as exc:  # noqa: BLE001 — report back to the model, don't crash the turn
             content = f"Tool '{name}' failed: {exc}"
+        preview = " ".join(str(content).split())[:_TRACE_PREVIEW_CHARS]
+        tool_logger.info("[#%d] %s.%s args=%s → %s", order, server, name, args, preview)
         return {"role": "tool", "tool_call_id": call.get("id", ""), "content": content}
+
+    def _server_for(self, name: str) -> str:
+        """Best-effort owning-server name for the trace (provider may not expose it)."""
+        resolver = getattr(self._tool_provider, "server_for", None)
+        if callable(resolver):
+            try:
+                return resolver(name)
+            except Exception:  # noqa: BLE001 — tracing must never break a tool call
+                pass
+        return "?"
 
     def _maybe_record(self, api_calls: list[dict] | None, label: str | None, completion: Completion) -> None:
         if api_calls is not None:

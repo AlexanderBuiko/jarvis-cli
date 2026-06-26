@@ -146,6 +146,16 @@ class MCPToolProvider:
         """Function-calling tool schema to attach to an LLM request."""
         return list(self._tool_specs)
 
+    def server_for(self, name: str) -> str:
+        """Owning-server name for a tool (wire or dotted), for routing traces.
+
+        Accepts the model's wire name (``wikipedia__get_summary``) or a dotted
+        qualified name; returns the namespace prefix (the server). ``"?"`` if the
+        name is unknown/un-namespaced.
+        """
+        qualified = self._wire_to_qualified.get(name, name)
+        return qualified.split(".", 1)[0] if "." in qualified else "?"
+
     def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> str:
         """Run a tool on the background loop and return its text result (blocking)."""
         if not self._started or self._closed or self._loop is None or self._queue is None:
