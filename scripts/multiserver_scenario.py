@@ -45,10 +45,15 @@ SYSTEM = (
     "readings, anomaly detection, current time, Telegram alerts), 'worldnews' "
     "(geo coordinates, news search and retrieval), and 'translation' (translate "
     "text between languages). Use the tools to fully satisfy the request; pass "
-    "each tool's output to the next as needed. For the final step, compose a single "
-    "notification containing the anomaly report, the translated news summary, and "
-    "the local time, and send it by calling send_telegram_alert with that text as "
-    "the 'message' argument (only after you have all three pieces)."
+    "each tool's output to the next as needed.\n"
+    "Search for news in the LOCAL language of the location (e.g. Japanese for "
+    "Tokyo, so language='ja') so the summary genuinely needs translating, then "
+    "call the translation tool to translate that summary into English. Never claim "
+    "you translated anything unless you actually called the translation tool; if "
+    "the news is already English, say so instead of claiming a translation.\n"
+    "For the final step, compose a single notification containing the anomaly "
+    "report, the (translated) news summary, and the local time, and send it by "
+    "calling send_telegram_alert with that text as the 'message' argument."
 )
 
 
