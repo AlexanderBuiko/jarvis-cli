@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import concurrent.futures
+import os
 import threading
 from typing import Any
 
@@ -34,8 +35,10 @@ from .client import MCPConnectionError
 from .registry import AggregatedTool, MCPRegistry
 from .bridge import to_wire_name, tools_to_openrouter
 
-# Stop a tool that hangs (or a wedged server) from blocking a turn forever.
-DEFAULT_CALL_TIMEOUT_S = 30
+# Stop a tool that hangs (or a wedged server) from blocking a turn forever. Public
+# third-party servers (news/search APIs, cold stdio subprocesses) can legitimately
+# take longer than a snappy local tool, so default generously and allow an override.
+DEFAULT_CALL_TIMEOUT_S = float(os.environ.get("JARVIS_MCP_CALL_TIMEOUT_S", "60"))
 # Bound how long we wait for the fleet to connect at startup.
 DEFAULT_READY_TIMEOUT_S = 30
 
@@ -154,7 +157,14 @@ class MCPToolProvider:
         name is unknown/un-namespaced.
         """
         qualified = self._wire_to_qualified.get(name, name)
-        return qualified.split(".", 1)[0] if "." in qualified else "?"
+        if "." in qualified:
+            return qualified.split(".", 1)[0]
+        # Bare name (the model can call an unambiguous tool without the prefix):
+        # find its owning server in the aggregated catalogue.
+        for tool in self._aggregated:
+            if tool.name == name:
+                return tool.server
+        return "?"
 
     def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> str:
         """Run a tool on the background loop and return its text result (blocking)."""

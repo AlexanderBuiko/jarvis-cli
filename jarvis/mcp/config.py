@@ -122,11 +122,16 @@ def _config_from_entry(entry: dict) -> MCPServerConfig:
     """Turn one ``servers.json`` entry into an MCPServerConfig (env-expanded)."""
     entry = _expand(entry)
     transport = entry.get("transport", STDIO)
-    env = entry.get("env") or {}
-    if env:
+    # Keep only env overrides that actually resolved: an unset ${VAR} stays literal
+    # after expansion, and passing "${WIKIPEDIA_ACCESS_TOKEN}" as a real token/key
+    # is worse than not setting it. Drop empty/unresolved values.
+    custom_env = {k: v for k, v in (entry.get("env") or {}).items()
+                  if v and "${" not in str(v)}
+    env = {}
+    if custom_env:
         # A custom env *replaces* the subprocess environment in the SDK, so merge
         # over the parent's (PATH etc.) — otherwise npx / console scripts vanish.
-        env = {**os.environ, **env}
+        env = {**os.environ, **custom_env}
     return MCPServerConfig(
         name=entry["name"],
         transport=transport,
