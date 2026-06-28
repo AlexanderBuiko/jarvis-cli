@@ -109,7 +109,8 @@ declares any mix of network (`streamable-http`/`sse`) and local `stdio` servers;
 {
   "servers": [
     {"name":"jarvis","transport":"streamable-http","url":"${JARVIS_MCP_URL}","api_key_env":"MCP_API_KEY"},
-    {"name":"translation","transport":"streamable-http","url":"https://mcp.doctranslate.io/mcp?api_key=${DOCTRANSLATE_API_KEY}"},
+    {"name":"translation","transport":"stdio","command":"npx","args":["-y","@libretranslate/mcp"],
+     "env":{"LIBRETRANSLATE_API_URL":"https://translate.fedilab.app"}},
     {"name":"worldnews","transport":"stdio","command":"npx","args":["-y","world-news-api-mcp"],
      "env":{"WORLD_NEWS_API_KEY":"${WORLD_NEWS_API_KEY}"}}
   ]

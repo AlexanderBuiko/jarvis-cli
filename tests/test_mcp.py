@@ -404,8 +404,9 @@ class MultiServerConfigTest(unittest.TestCase):
         body = json.dumps({"servers": [
             {"name": "jarvis", "transport": "streamable-http",
              "url": "https://jarvis.example/mcp", "api_key_env": "MCP_API_KEY"},
-            {"name": "translation", "transport": "streamable-http",
-             "url": "https://mcp.translate.example/mcp?api_key=${DOCTRANSLATE_API_KEY}"},
+            {"name": "translation", "transport": "stdio", "command": "npx",
+             "args": ["-y", "@libretranslate/mcp"],
+             "env": {"LIBRETRANSLATE_API_URL": "${LIBRETRANSLATE_API_URL}"}},
             {"name": "worldnews", "transport": "stdio", "command": "npx",
              "args": ["-y", "world-news-api-mcp"],
              "env": {"WORLD_NEWS_API_KEY": "${WORLD_NEWS_API_KEY}"}},
@@ -414,19 +415,17 @@ class MultiServerConfigTest(unittest.TestCase):
             path = self._write(tmp, body)
             with unittest.mock.patch.dict(os.environ,
                                           {"JARVIS_SERVERS_FILE": path,
-                                           "DOCTRANSLATE_API_KEY": "tkey",
+                                           "LIBRETRANSLATE_API_URL": "https://lt.example",
                                            "WORLD_NEWS_API_KEY": "secret-key"}):
                 servers = default_servers()
 
         by_name = {s.name: s for s in servers}
         self.assertEqual(set(by_name), {"jarvis", "translation", "worldnews"})
-        self.assertEqual(by_name["jarvis"].transport, STREAMABLE_HTTP)
-        self.assertEqual(by_name["translation"].transport, STREAMABLE_HTTP)
-        self.assertEqual(by_name["worldnews"].transport, STDIO)  # mixed fleet loads
-        # ${VAR} in the URL resolved from the real environment (key not stored literally).
-        self.assertIn("api_key=tkey", by_name["translation"].url)
-        self.assertEqual(by_name["worldnews"].command, "npx")
+        self.assertEqual(by_name["jarvis"].transport, STREAMABLE_HTTP)   # network +
+        self.assertEqual(by_name["translation"].transport, STDIO)        # stdio mix loads
+        self.assertEqual(by_name["worldnews"].transport, STDIO)
         # ${VAR} resolved from the real environment, not stored literally…
+        self.assertEqual(by_name["translation"].env["LIBRETRANSLATE_API_URL"], "https://lt.example")
         self.assertEqual(by_name["worldnews"].env["WORLD_NEWS_API_KEY"], "secret-key")
         # …and the parent env (PATH) is merged in so npx is still found.
         self.assertIn("PATH", by_name["worldnews"].env)

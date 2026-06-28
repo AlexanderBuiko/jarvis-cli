@@ -15,7 +15,9 @@ Prerequisites
   * JARVIS_MCP_URL (+ MCP_API_KEY)    the deployed jarvis server with the
                                       weather-anomaly pipeline tools
   * WORLD_NEWS_API_KEY                worldnewsapi.com key (for the news steps)
-  * DOCTRANSLATE_API_KEY             remote translation MCP key (for the translate step)
+  * translation server               LibreTranslate MCP (npx @libretranslate/mcp,
+                                      free, no key; LIBRETRANSLATE_API_URL in servers.json)
+  * npx available                     for the translation + world-news stdio servers
 
 Run:
     python scripts/multiserver_scenario.py
