@@ -1,7 +1,7 @@
 """
 Live end-to-end demonstration of the multi-server MCP flow.
 
-Registers the declared fleet (jarvis [remote] + wikipedia + worldnews [stdio]),
+Registers the declared fleet (jarvis [remote] + translation [remote] + worldnews),
 then asks the agent a single question that requires tools from all three servers.
 The agent itself selects the tools, the registry routes each call to its owning
 server, and the per-call trace (jarvis.tools logger) prints the order, target
@@ -15,8 +15,7 @@ Prerequisites
   * JARVIS_MCP_URL (+ MCP_API_KEY)    the deployed jarvis server with the
                                       weather-anomaly pipeline tools
   * WORLD_NEWS_API_KEY                worldnewsapi.com key (for the news steps)
-  * wikipedia-mcp installed           pip install --user wikipedia-mcp
-  * npx available                     for world-news-api-mcp
+  * DOCTRANSLATE_API_KEY             remote translation MCP key (for the translate step)
 
 Run:
     python scripts/multiserver_scenario.py
@@ -32,20 +31,20 @@ from jarvis.openrouter.client import DEFAULT_MODEL, OpenRouterClient
 from jarvis.mcp.provider import MCPToolProvider
 
 SCENARIO = (
-    "Analyze the weather in Tokyo for the last week. If unusual conditions are "
-    "detected, gather recent weather-related news near Tokyo, collect contextual "
-    "information about the city, determine the current local time, and send me a "
-    "Telegram summary that includes the anomalies, the local time, a short news "
-    "digest, and the city context."
+    "Analyze weather conditions in Tokyo. If anomalies are detected, search for "
+    "recent weather-related news near Tokyo, translate the news summary into "
+    "English, determine the current local time, and send me a Telegram "
+    "notification containing the anomaly report, the translated news summary, and "
+    "the timestamp."
 )
 
 SYSTEM = (
     "You are Jarvis. You have tools from several MCP servers: 'jarvis' (weather "
     "readings, anomaly detection, current time, Telegram alerts), 'worldnews' "
-    "(geo coordinates, news search and retrieval), and 'wikipedia' (article "
-    "summaries). Use the tools to fully satisfy the request; pass each tool's "
-    "output to the next as needed. Only send the Telegram alert once you have the "
-    "anomalies, news, city context, and local time."
+    "(geo coordinates, news search and retrieval), and 'translation' (translate "
+    "text between languages). Use the tools to fully satisfy the request; pass "
+    "each tool's output to the next as needed. Only send the Telegram alert once "
+    "you have the anomalies, news, translated summary, and local time."
 )
 
 

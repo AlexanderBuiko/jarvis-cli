@@ -1,5 +1,5 @@
 {
-  "_comment": "Multi-server MCP fleet for jarvis-cli. Copy to ./servers.json or ~/.jarvis/servers.json (or point JARVIS_SERVERS_FILE at it). The agent aggregates every server's tools, namespaced as <name>.<tool>, and routes each call to the owning server. ${VAR} in any string is expanded from the environment, so API keys stay out of this file. Remove these _comment keys in your real file if you like; they are ignored.",
+  "_comment": "Multi-server MCP fleet for jarvis-cli. Copy to ./servers.json or ~/.jarvis/servers.json (or point JARVIS_SERVERS_FILE at it). The agent aggregates every server's tools, namespaced as <name>.<tool>, and routes each call to the owning server. ${VAR} in any string is expanded from the environment, so API keys stay out of this file. The translation server passes its key as a URL query param since our client sends only X-API-Key; swap in any remote translation MCP whose tools the LLM can pick by description.",
   "servers": [
     {
       "name": "jarvis",
@@ -8,11 +8,9 @@
       "api_key_env": "MCP_API_KEY"
     },
     {
-      "name": "wikipedia",
-      "transport": "stdio",
-      "command": "wikipedia-mcp",
-      "args": [],
-      "env": { "WIKIPEDIA_ACCESS_TOKEN": "${WIKIPEDIA_ACCESS_TOKEN}" }
+      "name": "translation",
+      "transport": "streamable-http",
+      "url": "https://mcp.doctranslate.io/mcp?api_key=${DOCTRANSLATE_API_KEY}"
     },
     {
       "name": "worldnews",

@@ -152,7 +152,7 @@ class MCPToolProvider:
     def server_for(self, name: str) -> str:
         """Owning-server name for a tool (wire or dotted), for routing traces.
 
-        Accepts the model's wire name (``wikipedia__get_summary``) or a dotted
+        Accepts the model's wire name (``translation__translate``) or a dotted
         qualified name; returns the namespace prefix (the server). ``"?"`` if the
         name is unknown/un-namespaced.
         """

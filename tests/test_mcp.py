@@ -404,7 +404,8 @@ class MultiServerConfigTest(unittest.TestCase):
         body = json.dumps({"servers": [
             {"name": "jarvis", "transport": "streamable-http",
              "url": "https://jarvis.example/mcp", "api_key_env": "MCP_API_KEY"},
-            {"name": "wikipedia", "transport": "stdio", "command": "wikipedia-mcp"},
+            {"name": "translation", "transport": "streamable-http",
+             "url": "https://mcp.translate.example/mcp?api_key=${DOCTRANSLATE_API_KEY}"},
             {"name": "worldnews", "transport": "stdio", "command": "npx",
              "args": ["-y", "world-news-api-mcp"],
              "env": {"WORLD_NEWS_API_KEY": "${WORLD_NEWS_API_KEY}"}},
@@ -413,13 +414,17 @@ class MultiServerConfigTest(unittest.TestCase):
             path = self._write(tmp, body)
             with unittest.mock.patch.dict(os.environ,
                                           {"JARVIS_SERVERS_FILE": path,
+                                           "DOCTRANSLATE_API_KEY": "tkey",
                                            "WORLD_NEWS_API_KEY": "secret-key"}):
                 servers = default_servers()
 
         by_name = {s.name: s for s in servers}
-        self.assertEqual(set(by_name), {"jarvis", "wikipedia", "worldnews"})
+        self.assertEqual(set(by_name), {"jarvis", "translation", "worldnews"})
         self.assertEqual(by_name["jarvis"].transport, STREAMABLE_HTTP)
-        self.assertEqual(by_name["wikipedia"].transport, STDIO)
+        self.assertEqual(by_name["translation"].transport, STREAMABLE_HTTP)
+        self.assertEqual(by_name["worldnews"].transport, STDIO)  # mixed fleet loads
+        # ${VAR} in the URL resolved from the real environment (key not stored literally).
+        self.assertIn("api_key=tkey", by_name["translation"].url)
         self.assertEqual(by_name["worldnews"].command, "npx")
         # ${VAR} resolved from the real environment, not stored literally…
         self.assertEqual(by_name["worldnews"].env["WORLD_NEWS_API_KEY"], "secret-key")
@@ -451,7 +456,7 @@ class _MultiServerEngine:
         ("worldnews__get_geo_coordinates", "location"),
         ("worldnews__search_news", "location"),
         ("worldnews__retrieve_news_articles", "ids"),
-        ("wikipedia__get_summary", "title"),
+        ("translation__translate", "text"),
         ("jarvis__get_current_time", "city"),
         ("jarvis__send_telegram_alert", "anomaly_report"),
     ]
@@ -490,8 +495,8 @@ class _MultiServerProvider:
         "jarvis__detect_weather_anomalies": '{"city":"Tokyo","anomaly_count":1,"anomalies":[{"type":"rapid_temperature_drop"}]}',
         "worldnews__get_geo_coordinates": '{"lat":35.68,"lon":139.69}',
         "worldnews__search_news": '{"ids":[1,2,3]}',
-        "worldnews__retrieve_news_articles": '{"articles":[{"title":"Storm nears Tokyo"}]}',
-        "wikipedia__get_summary": '{"summary":"Tokyo is the capital of Japan."}',
+        "worldnews__retrieve_news_articles": '{"articles":[{"title":"嵐が東京に接近"}]}',
+        "translation__translate": '{"translated_text":"Storm approaches Tokyo"}',
         "jarvis__get_current_time": "Tokyo: Tue, 2026-06-26 21:00 (Asia/Tokyo)",
         "jarvis__send_telegram_alert": '{"sent":true,"anomaly_count":1}',
     }
@@ -532,8 +537,8 @@ class MultiServerFlowTest(unittest.TestCase):
         servers_in_order = [s for s, _ in provider.routed]
         self.assertEqual(servers_in_order,
                          ["jarvis", "jarvis", "worldnews", "worldnews", "worldnews",
-                          "wikipedia", "jarvis", "jarvis"])
-        self.assertEqual({*servers_in_order}, {"jarvis", "worldnews", "wikipedia"})
+                          "translation", "jarvis", "jarvis"])
+        self.assertEqual({*servers_in_order}, {"jarvis", "worldnews", "translation"})
         # Long flow completed within the (raised) round cap: 8 tools + final answer.
         self.assertEqual(len(provider.routed), 8)
         self.assertEqual(completion.text, "Summary sent.")
@@ -541,7 +546,7 @@ class MultiServerFlowTest(unittest.TestCase):
         # Trace shows order index + target server + bare tool name for each call.
         joined = "\n".join(logs.output)
         self.assertIn("[1] jarvis.get_weather_readings(", joined)
-        self.assertIn("[6] wikipedia.get_summary(", joined)
+        self.assertIn("[6] translation.translate(", joined)
         self.assertIn("[8] jarvis.send_telegram_alert(", joined)
 
     def test_flow_exceeds_old_six_round_cap(self):

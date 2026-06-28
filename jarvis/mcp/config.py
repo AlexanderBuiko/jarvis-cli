@@ -123,7 +123,7 @@ def _config_from_entry(entry: dict) -> MCPServerConfig:
     entry = _expand(entry)
     transport = entry.get("transport", STDIO)
     # Keep only env overrides that actually resolved: an unset ${VAR} stays literal
-    # after expansion, and passing "${WIKIPEDIA_ACCESS_TOKEN}" as a real token/key
+    # after expansion, and passing "${WORLD_NEWS_API_KEY}" verbatim as a real key
     # is worse than not setting it. Drop empty/unresolved values.
     custom_env = {k: v for k, v in (entry.get("env") or {}).items()
                   if v and "${" not in str(v)}

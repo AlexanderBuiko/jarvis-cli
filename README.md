@@ -109,7 +109,7 @@ declares any mix of network (`streamable-http`/`sse`) and local `stdio` servers;
 {
   "servers": [
     {"name":"jarvis","transport":"streamable-http","url":"${JARVIS_MCP_URL}","api_key_env":"MCP_API_KEY"},
-    {"name":"wikipedia","transport":"stdio","command":"wikipedia-mcp","args":[]},
+    {"name":"translation","transport":"streamable-http","url":"https://mcp.doctranslate.io/mcp?api_key=${DOCTRANSLATE_API_KEY}"},
     {"name":"worldnews","transport":"stdio","command":"npx","args":["-y","world-news-api-mcp"],
      "env":{"WORLD_NEWS_API_KEY":"${WORLD_NEWS_API_KEY}"}}
   ]
@@ -121,7 +121,7 @@ fleet still works. `mcp list` shows the aggregated catalogue and any failures.
 
 Each tool call is traced (order · target server · tool · result) on the
 `jarvis.tools` logger. `scripts/multiserver_scenario.py` runs a full cross-server
-demo (weather anomalies → news → city context → time → Telegram alert) and prints
+demo (weather anomalies → news → translate → time → Telegram alert) and prints
 the trace.
 
 ---
