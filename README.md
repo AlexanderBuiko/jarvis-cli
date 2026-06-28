@@ -73,7 +73,7 @@ Set only what you want to change.
 
 | Parameter | Type | Description |
 |---|---|---|
-| `model` | str | OpenRouter model identifier. Default: `anthropic/claude-sonnet-4` |
+| `model` | str | OpenRouter model identifier. Default: `google/gemini-2.5-flash` (cheap + reliable tool-calling for long flows) |
 | `temperature` | float 0.0–2.0 | Sampling temperature |
 | `top_p` | float 0.0–1.0 | Nucleus sampling probability |
 | `top_k` | int | Top-k sampling cutoff |
@@ -89,6 +89,41 @@ Set only what you want to change.
 | `step_by_step` | Reason through steps explicitly before answering |
 | `expert_panel` | Three-expert panel discussion with a synthesised final answer |
 | `prompt_generation` | Stage 1: generate an optimised prompt for the task. Stage 2: answer using it |
+
+---
+
+## MCP servers (multi-server fleet)
+
+Jarvis aggregates tools from **several MCP servers** at once. Each tool is
+namespaced `<server>.<tool>`, and every call the model makes is routed to the
+owning server — so the agent can chain a single request across servers.
+
+**Single server** (default): set `JARVIS_MCP_URL` (+ optional `MCP_API_KEY`).
+
+**Multiple servers**: create a `servers.json` (copy `servers.json.example`) in the
+working directory or `~/.jarvis/`, or point `JARVIS_SERVERS_FILE` at one. It
+declares any mix of network (`streamable-http`/`sse`) and local `stdio` servers;
+`${VAR}` is expanded from the environment so keys stay out of the file:
+
+```json
+{
+  "servers": [
+    {"name":"jarvis","transport":"streamable-http","url":"${JARVIS_MCP_URL}","api_key_env":"MCP_API_KEY"},
+    {"name":"translation","transport":"stdio","command":"npx","args":["-y","@libretranslate/mcp"],
+     "env":{"LIBRETRANSLATE_API_URL":"https://translate.fedilab.app"}},
+    {"name":"worldnews","transport":"stdio","command":"npx","args":["-y","world-news-api-mcp"],
+     "env":{"WORLD_NEWS_API_KEY":"${WORLD_NEWS_API_KEY}"}}
+  ]
+}
+```
+
+A server that's down or misconfigured is recorded and skipped — the rest of the
+fleet still works. `mcp list` shows the aggregated catalogue and any failures.
+
+Each tool call is traced (order · target server · tool · result) on the
+`jarvis.tools` logger. `scripts/multiserver_scenario.py` runs a full cross-server
+demo (weather anomalies → news → translate → time → Telegram alert) and prints
+the trace.
 
 ---
 

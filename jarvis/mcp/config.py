@@ -15,9 +15,13 @@ same dataclass extends naturally to HTTP/SSE transports later by adding a
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 import sys
 from dataclasses import dataclass, field
+
+logger = logging.getLogger("jarvis.mcp.config")
 
 # Supported transports. ``stdio`` launches the server as a subprocess (the
 # original local model). The two network transports connect to an already-running
@@ -80,15 +84,103 @@ REMOTE_URL_ENV_LEGACY = "JARVIS_TIME_MCP_URL"
 DEFAULT_SERVERS: list[MCPServerConfig] = []
 
 
-def default_servers() -> list[MCPServerConfig]:
-    """Build the active fleet, reading the environment *at call time*.
+# A declarative fleet file lets several servers (network *and* stdio) be wired as
+# data, not code — the multi-server story. Searched in this order; first hit wins:
+#   1. $JARVIS_SERVERS_FILE   2. ./servers.json   3. ~/.jarvis/servers.json
+SERVERS_FILE_ENV = "JARVIS_SERVERS_FILE"
 
-    Env is read here — not at import — so it reflects values loaded from .env
-    files at startup (see jarvis.config.env_file). The standalone Jarvis MCP
-    server is wired in *explicitly* by setting JARVIS_MCP_URL (or the legacy
-    JARVIS_TIME_MCP_URL); unset → no MCP tools. If the configured server is down
-    the registry records the failure rather than crashing (see MCPRegistry).
+
+def _servers_file_path() -> str | None:
+    """Resolve the fleet-config file path from env/cwd/home, or None if absent."""
+    explicit = os.environ.get(SERVERS_FILE_ENV, "").strip()
+    candidates = [explicit] if explicit else [
+        os.path.join(os.getcwd(), "servers.json"),
+        os.path.join(os.path.expanduser("~"), ".jarvis", "servers.json"),
+    ]
+    for path in candidates:
+        if path and os.path.isfile(path):
+            return path
+    return None
+
+
+def _expand(value):
+    """Expand ${VAR}/$VAR from the environment in any string (recursing lists/dicts).
+
+    Keeps secrets *out* of the file: a server's api key is referenced as
+    ``"${WORLD_NEWS_API_KEY}"`` and resolved from the real environment at load time.
     """
+    if isinstance(value, str):
+        return os.path.expandvars(value)
+    if isinstance(value, list):
+        return [_expand(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _expand(v) for k, v in value.items()}
+    return value
+
+
+def _config_from_entry(entry: dict) -> MCPServerConfig:
+    """Turn one ``servers.json`` entry into an MCPServerConfig (env-expanded)."""
+    entry = _expand(entry)
+    transport = entry.get("transport", STDIO)
+    # Keep only env overrides that actually resolved: an unset ${VAR} stays literal
+    # after expansion, and passing "${WORLD_NEWS_API_KEY}" verbatim as a real key
+    # is worse than not setting it. Drop empty/unresolved values.
+    custom_env = {k: v for k, v in (entry.get("env") or {}).items()
+                  if v and "${" not in str(v)}
+    env = {}
+    if custom_env:
+        # A custom env *replaces* the subprocess environment in the SDK, so merge
+        # over the parent's (PATH etc.) — otherwise npx / console scripts vanish.
+        env = {**os.environ, **custom_env}
+    return MCPServerConfig(
+        name=entry["name"],
+        transport=transport,
+        command=entry.get("command", sys.executable),
+        args=list(entry.get("args", [])),
+        env=env,
+        url=entry.get("url"),
+        api_key_env=entry.get("api_key_env"),
+    )
+
+
+def _load_servers_file(path: str) -> list[MCPServerConfig]:
+    """Parse a ``servers.json`` fleet file into MCPServerConfigs.
+
+    A malformed entry is skipped (logged), so one bad line doesn't sink the fleet —
+    mirroring the registry's partial-failure stance.
+    """
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+    configs: list[MCPServerConfig] = []
+    for entry in data.get("servers", []):
+        try:
+            configs.append(_config_from_entry(entry))
+        except (KeyError, ValueError) as exc:
+            logger.warning("skipping invalid server entry %r: %s", entry, exc)
+    return configs
+
+
+def default_servers() -> list[MCPServerConfig]:
+    """Build the active fleet, reading config *at call time*.
+
+    Precedence:
+      1. A ``servers.json`` fleet file (env/cwd/home) — the multi-server path:
+         any number of network and stdio servers, wired declaratively.
+      2. Otherwise the legacy single-server env wiring: JARVIS_MCP_URL (or the
+         legacy JARVIS_TIME_MCP_URL) → one streamable-http server.
+      3. Otherwise no servers (no MCP tools).
+
+    Config is read here — not at import — so it reflects values loaded from .env
+    files at startup. A server that's down/unreachable is recorded by the registry
+    rather than crashing the fleet.
+    """
+    path = _servers_file_path()
+    if path:
+        configs = _load_servers_file(path)
+        if configs:
+            logger.info("loaded %d MCP server(s) from %s", len(configs), path)
+            return configs
+
     servers = list(DEFAULT_SERVERS)
     url = (os.environ.get(REMOTE_URL_ENV, "").strip()
            or os.environ.get(REMOTE_URL_ENV_LEGACY, "").strip())

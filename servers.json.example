@@ -1,0 +1,25 @@
+{
+  "_comment": "Multi-server MCP fleet for jarvis-cli. Copy to ./servers.json or ~/.jarvis/servers.json (or point JARVIS_SERVERS_FILE at it). The agent aggregates every server's tools, namespaced as <name>.<tool>, and routes each call to the owning server. ${VAR} in any string is expanded from the environment, so secrets stay out of this file. The translation server is LibreTranslate (free, no API key) pointed at a public instance via LIBRETRANSLATE_API_URL — swap the URL for another instance or a self-hosted one for better quality/reliability.",
+  "servers": [
+    {
+      "name": "jarvis",
+      "transport": "streamable-http",
+      "url": "${JARVIS_MCP_URL}",
+      "api_key_env": "MCP_API_KEY"
+    },
+    {
+      "name": "translation",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@libretranslate/mcp"],
+      "env": { "LIBRETRANSLATE_API_URL": "https://translate.fedilab.app" }
+    },
+    {
+      "name": "worldnews",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "world-news-api-mcp"],
+      "env": { "WORLD_NEWS_API_KEY": "${WORLD_NEWS_API_KEY}" }
+    }
+  ]
+}

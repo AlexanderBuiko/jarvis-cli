@@ -385,6 +385,176 @@ class PipelineChainingTest(unittest.TestCase):
         self.assertEqual(len(calls), 4)  # 3 tool rounds + final answer, all billed
 
 
+class MultiServerConfigTest(unittest.TestCase):
+    """servers.json declares a multi-server fleet (network + stdio) as data."""
+
+    def _write(self, tmpdir, body):
+        import os
+        path = os.path.join(tmpdir, "servers.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(body)
+        return path
+
+    def test_loads_three_servers_with_env_expansion(self):
+        import json
+        import os
+        import tempfile
+        from jarvis.mcp.config import STDIO, STREAMABLE_HTTP, default_servers
+
+        body = json.dumps({"servers": [
+            {"name": "jarvis", "transport": "streamable-http",
+             "url": "https://jarvis.example/mcp", "api_key_env": "MCP_API_KEY"},
+            {"name": "translation", "transport": "stdio", "command": "npx",
+             "args": ["-y", "@libretranslate/mcp"],
+             "env": {"LIBRETRANSLATE_API_URL": "${LIBRETRANSLATE_API_URL}"}},
+            {"name": "worldnews", "transport": "stdio", "command": "npx",
+             "args": ["-y", "world-news-api-mcp"],
+             "env": {"WORLD_NEWS_API_KEY": "${WORLD_NEWS_API_KEY}"}},
+        ]})
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._write(tmp, body)
+            with unittest.mock.patch.dict(os.environ,
+                                          {"JARVIS_SERVERS_FILE": path,
+                                           "LIBRETRANSLATE_API_URL": "https://lt.example",
+                                           "WORLD_NEWS_API_KEY": "secret-key"}):
+                servers = default_servers()
+
+        by_name = {s.name: s for s in servers}
+        self.assertEqual(set(by_name), {"jarvis", "translation", "worldnews"})
+        self.assertEqual(by_name["jarvis"].transport, STREAMABLE_HTTP)   # network +
+        self.assertEqual(by_name["translation"].transport, STDIO)        # stdio mix loads
+        self.assertEqual(by_name["worldnews"].transport, STDIO)
+        # ${VAR} resolved from the real environment, not stored literally…
+        self.assertEqual(by_name["translation"].env["LIBRETRANSLATE_API_URL"], "https://lt.example")
+        self.assertEqual(by_name["worldnews"].env["WORLD_NEWS_API_KEY"], "secret-key")
+        # …and the parent env (PATH) is merged in so npx is still found.
+        self.assertIn("PATH", by_name["worldnews"].env)
+
+    def test_falls_back_to_single_url_when_no_file(self):
+        import os
+        from jarvis.mcp.config import default_servers
+
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("JARVIS_SERVERS_FILE", "JARVIS_MCP_URL", "JARVIS_TIME_MCP_URL")}
+        env["JARVIS_MCP_URL"] = "https://only.example/mcp"
+        # cwd has no servers.json in the test working dir tree we control here;
+        # force the file lookup to miss by pointing the env var at a nonexistent path.
+        env["JARVIS_SERVERS_FILE"] = "/nonexistent/servers.json"
+        with unittest.mock.patch.dict(os.environ, env, clear=True):
+            servers = default_servers()
+        self.assertEqual([s.name for s in servers], ["jarvis"])
+        self.assertEqual(servers[0].url, "https://only.example/mcp")
+
+
+class _MultiServerEngine:
+    """Fake engine driving the 8-step, 3-server Tokyo scenario, one call per round."""
+
+    CHAIN = [
+        ("jarvis__get_weather_readings", "city"),
+        ("jarvis__detect_weather_anomalies", "weather_report"),
+        ("worldnews__get_geo_coordinates", "location"),
+        ("worldnews__search_news", "location"),
+        ("worldnews__retrieve_news_articles", "ids"),
+        ("translation__translate", "text"),
+        ("jarvis__get_current_time", "city"),
+        ("jarvis__send_telegram_alert", "anomaly_report"),
+    ]
+
+    def __init__(self):
+        self.calls = []
+
+    def complete(self, messages, params):
+        from jarvis.openrouter.client import Completion
+        self.calls.append((messages, params))
+        step = sum(1 for m in messages if m.get("role") == "tool")
+        if step >= len(self.CHAIN):
+            return Completion(text="Summary sent.", finish_reason="stop",
+                              request={}, response={}, latency_ms=0.0, tool_calls=None)
+        name, key = self.CHAIN[step]
+        prior = [m for m in messages if m.get("role") == "tool"]
+        import json as _json
+        arg = prior[-1]["content"] if prior else "Tokyo"
+        return Completion(
+            text="", finish_reason="stop", request={}, response={}, latency_ms=0.0,
+            tool_calls=[{"id": f"c{step}", "type": "function",
+                         "function": {"name": name, "arguments": _json.dumps({key: arg})}}])
+
+    def get_pricing(self, _):
+        return (None, None)
+
+    def get_context_window(self, _):
+        return None
+
+
+class _MultiServerProvider:
+    """Records (server, tool) per call and resolves server like the real provider."""
+
+    RESULTS = {
+        "jarvis__get_weather_readings": '{"report_type":"weather_readings.v1","city":"Tokyo"}',
+        "jarvis__detect_weather_anomalies": '{"city":"Tokyo","anomaly_count":1,"anomalies":[{"type":"rapid_temperature_drop"}]}',
+        "worldnews__get_geo_coordinates": '{"lat":35.68,"lon":139.69}',
+        "worldnews__search_news": '{"ids":[1,2,3]}',
+        "worldnews__retrieve_news_articles": '{"articles":[{"title":"嵐が東京に接近"}]}',
+        "translation__translate": '{"translated_text":"Storm approaches Tokyo"}',
+        "jarvis__get_current_time": "Tokyo: Tue, 2026-06-26 21:00 (Asia/Tokyo)",
+        "jarvis__send_telegram_alert": '{"sent":true,"anomaly_count":1}',
+    }
+
+    def __init__(self):
+        self.routed = []  # (server, tool) in call order
+
+    def tool_specs(self):
+        return [{"type": "function", "function": {"name": n, "description": "",
+                 "parameters": {"type": "object"}}} for n in self.RESULTS]
+
+    def server_for(self, name):
+        return name.split("__", 1)[0] if "__" in name else "?"
+
+    def call_tool(self, name, args):
+        self.routed.append((self.server_for(name), name))
+        return self.RESULTS[name]
+
+
+class MultiServerFlowTest(unittest.TestCase):
+    """Long cross-server flow: correct selection, routing, order, and trace."""
+
+    def test_eight_step_three_server_flow(self):
+        from jarvis.llm.gateway import LLMGateway
+        engine, provider = _MultiServerEngine(), _MultiServerProvider()
+        gw = LLMGateway(engine, tool_provider=provider)
+        api_calls = []
+        with self.assertLogs("jarvis.tools", level="INFO") as logs:
+            completion = gw.complete(
+                [{"role": "user", "content": "Analyze Tokyo weather; if unusual, "
+                                             "gather news + city context and alert me."}],
+                {}, label="answer", api_calls=api_calls, use_tools=True)
+
+        # Correct selection + order across the three servers.
+        self.assertEqual([t for _, t in provider.routed],
+                         [name for name, _ in _MultiServerEngine.CHAIN])
+        # Correct routing: each call went to the right server.
+        servers_in_order = [s for s, _ in provider.routed]
+        self.assertEqual(servers_in_order,
+                         ["jarvis", "jarvis", "worldnews", "worldnews", "worldnews",
+                          "translation", "jarvis", "jarvis"])
+        self.assertEqual({*servers_in_order}, {"jarvis", "worldnews", "translation"})
+        # Long flow completed within the (raised) round cap: 8 tools + final answer.
+        self.assertEqual(len(provider.routed), 8)
+        self.assertEqual(completion.text, "Summary sent.")
+        self.assertEqual(len(api_calls), 9)
+        # Trace shows order index + target server + bare tool name for each call.
+        joined = "\n".join(logs.output)
+        self.assertIn("[1] jarvis.get_weather_readings(", joined)
+        self.assertIn("[6] translation.translate(", joined)
+        self.assertIn("[8] jarvis.send_telegram_alert(", joined)
+
+    def test_flow_exceeds_old_six_round_cap(self):
+        # Regression guard: the 8-step flow would have been truncated at the old
+        # MAX_TOOL_ROUNDS=6. Confirm the cap is high enough now.
+        from jarvis.llm.gateway import MAX_TOOL_ROUNDS
+        self.assertGreaterEqual(MAX_TOOL_ROUNDS, len(_MultiServerEngine.CHAIN))
+
+
 class InvariantToolContextTest(unittest.TestCase):
     """Tool-sourced facts must not be flagged as fabrication."""
 

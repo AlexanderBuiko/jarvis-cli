@@ -15,7 +15,11 @@ from typing import Any, NamedTuple
 
 import requests
 
-DEFAULT_MODEL = "anthropic/claude-sonnet-4"
+# Default model. Switched from anthropic/claude-sonnet-4 to a cheaper, fast model
+# with solid function-calling — important for the long multi-server tool flow
+# (many tools offered, ~8 dependent calls). Override per-session via the runtime
+# `model` config; this is just the baseline when none is set.
+DEFAULT_MODEL = "google/gemini-2.5-flash"
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODELS_URL = "https://openrouter.ai/api/v1/models"
 

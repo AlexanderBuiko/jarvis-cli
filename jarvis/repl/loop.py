@@ -115,7 +115,7 @@ def run_repl(agent: JarvisAgent, config_manager: ConfigManager) -> None:
             else:
                 try:
                     reply, _ = _run_with_spinner(lambda: agent.chat(raw))
-                    output = f"A: {reply}"
+                    output = _tool_trace_block() + f"A: {reply}"
                 except Exception as exc:
                     output = f"Error: {exc}"
 
@@ -554,6 +554,22 @@ def _locked_param_error(sub: str, args: list[str], agent: JarvisAgent) -> str | 
                 "Use 'thread new' or 'thread clear' first."
             )
     return None
+
+
+def _tool_trace_block() -> str:
+    """Render this turn's tool calls as a tidy block above the answer (or "").
+
+    Reads the lines the gateway logged via jarvis.tools (buffered by
+    repl.tool_trace), so the user sees which tools ran, on which server, and in
+    what order — without the raw per-request log noise.
+    """
+    from .tool_trace import drain
+
+    lines = drain()
+    if not lines:
+        return ""
+    body = "\n".join(f"  ↪ {line}" for line in lines)
+    return f"Tools used ({len(lines)}):\n{body}\n\n"
 
 
 # Spinner frames for the in-progress animation (Braille spinner).
