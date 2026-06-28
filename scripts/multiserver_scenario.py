@@ -43,8 +43,10 @@ SYSTEM = (
     "readings, anomaly detection, current time, Telegram alerts), 'worldnews' "
     "(geo coordinates, news search and retrieval), and 'translation' (translate "
     "text between languages). Use the tools to fully satisfy the request; pass "
-    "each tool's output to the next as needed. Only send the Telegram alert once "
-    "you have the anomalies, news, translated summary, and local time."
+    "each tool's output to the next as needed. For the final step, compose a single "
+    "notification containing the anomaly report, the translated news summary, and "
+    "the local time, and send it by calling send_telegram_alert with that text as "
+    "the 'message' argument (only after you have all three pieces)."
 )
 
 
