@@ -70,6 +70,10 @@ Commands
   index compare <path> [k=v]    Compare fixed vs structure-aware chunking (query=, size=, overlap=)
   index delete <name>           Delete an index
 
+  rag ask <question> [k=v]      Answer once without RAG vs with RAG, side by side
+  rag eval [name=..] [k=v]      Run the 10 control questions and score quality
+                                (answers=off → cheap retrieval-only run)
+
   Indexing builds a local vector index for retrieval (RAG). Embeddings use the
   provider set by JARVIS_EMBED_PROVIDER (default 'ollama'; 'openrouter' optional).
   Chunking has two strategies — 'fixed' (fixed-size with overlap) and 'structure'
@@ -947,6 +951,79 @@ def _index_delete(args: list[str]) -> str:
         f"Deleted index '{name}'." if IndexStore().delete(name)
         else f"No such index: '{name}'."
     )
+
+
+# ── RAG comparison & evaluation ──────────────────────────────────────────────
+
+_RAG_USAGE = (
+    "Usage:\n"
+    "  rag ask <question words…> [name=..] [k=5]      Answer once without vs with RAG\n"
+    "  rag eval [name=..] [k=5] [answers=on|off]      Run the control questions + score\n"
+    "Note: both call the chat model (rag ask = 2 calls; rag eval = ~2×questions).\n"
+    "      'answers=off' makes eval retrieval-only (cheap — no chat calls)."
+)
+
+
+def handle_rag(args: list[str], agent: JarvisAgent, config_manager: ConfigManager) -> str:
+    """Compare un-grounded vs RAG-grounded answers, and score the control set."""
+    sub = args[0].lower() if args else ""
+    rest = args[1:]
+    try:
+        if sub == "ask":
+            return _rag_ask(rest, agent, config_manager)
+        if sub == "eval":
+            return _rag_eval(rest, agent, config_manager)
+        return _RAG_USAGE
+    except Exception as exc:  # boundary: report, don't crash the REPL
+        return f"RAG error: {exc}"
+
+
+def _resolve_rag_index(opts: dict, config_manager: ConfigManager) -> str | None:
+    """Index name from name=, else the configured rag_index, else most recent."""
+    name = opts.get("name") or config_manager.runtime.get("rag_index")
+    if name:
+        return name
+    items = IndexStore().list_all()
+    return items[0]["name"] if items else None
+
+
+def _rag_ask(args: list[str], agent: JarvisAgent, config_manager: ConfigManager) -> str:
+    positional, opts = _split_index_args(args)
+    question = " ".join(positional).strip()
+    if not question:
+        return "Usage: rag ask <question words…> [name=..] [k=5]"
+    index = _resolve_rag_index(opts, config_manager)
+    if not index:
+        return "No index to retrieve from. Build one:  index build <path>"
+    k = int(opts.get("k", 5))
+    plain, grounded, results, error = agent.compare_rag(question, index, k)
+    sep = "─" * 78
+    lines = [f"Question: {question}", f"Index: {index}  (k={k})", "",
+             sep, "Without RAG (model's general knowledge)", sep, plain, ""]
+    if error:
+        lines += [sep, f"With RAG — unavailable: {error}", sep]
+    else:
+        srcs = []
+        for r in results:
+            fn = r["metadata"].get("filename", "?")
+            if fn not in srcs:
+                srcs.append(fn)
+        lines += [sep, f"With RAG (sources: {', '.join(srcs)})", sep, grounded or "(no answer)"]
+    return "\n".join(lines)
+
+
+def _rag_eval(args: list[str], agent: JarvisAgent, config_manager: ConfigManager) -> str:
+    from ..rag import load_questions, evaluate, format_report, DEFAULT_QUESTIONS_PATH
+
+    positional, opts = _split_index_args(args)
+    index = _resolve_rag_index(opts, config_manager)
+    if not index:
+        return "No index to evaluate against. Build one:  index build <path>"
+    k = int(opts.get("k", 5))
+    generate = opts.get("answers", "on").lower() not in ("off", "false", "no", "0")
+    questions = load_questions(opts.get("questions") or DEFAULT_QUESTIONS_PATH)
+    report = evaluate(agent, questions, index, k=k, generate_answers=generate)
+    return format_report(report)
 
 
 def handle_session_chat(session_store: SessionStore) -> str:

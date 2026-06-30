@@ -46,6 +46,8 @@ COMMAND_TREE: dict[str, dict] = {
     "invariants": {"show": {}, "init": {}},
     "profile": {"show": {}, "onboard": {}},
     "mcp":     {"list": {}, "call": {}},
+    "index":   {"build": {}, "list": {}, "show": {}, "search": {}, "compare": {}, "delete": {}},
+    "rag":     {"ask": {}, "eval": {}},
     "personalize": {},
     "help":    {},
     "exit":    {},
