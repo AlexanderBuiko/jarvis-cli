@@ -29,6 +29,9 @@ _PARAM_PARSERS: dict[str, Any] = {
     "window_size":       int,
     "review_agents":     int,
     "execution_agents":  int,
+    "rag":               _parse_bool,
+    "rag_index":         str,
+    "rag_k":             int,
 }
 
 _PARAM_VALIDATORS: dict[str, tuple] = {
@@ -65,6 +68,11 @@ _PARAM_VALIDATORS: dict[str, tuple] = {
     "execution_agents": (
         lambda v: 1 <= v <= 8,
         "execution_agents must be between 1 and 8",
+    ),
+    # Number of chunks retrieved per RAG-enabled chat turn.
+    "rag_k": (
+        lambda v: 1 <= v <= 20,
+        "rag_k must be between 1 and 20",
     ),
 }
 

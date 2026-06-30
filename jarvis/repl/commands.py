@@ -6,6 +6,9 @@ returns a string to print. Handlers are pure except `personalize`, which
 prompts for confirmation before applying a profile update.
 """
 
+import re
+from pathlib import Path
+
 from ..agent import JarvisAgent, _COMPRESSION_INTERVAL
 from ..config.manager import ConfigManager
 from ..session.store import (
@@ -14,6 +17,8 @@ from ..session.store import (
     _render_request_cost_chart,
     _render_cumulative_cost_chart,
 )
+from ..indexing import IndexPipeline, IndexStore, make_embedder
+from ..indexing.chunking import DEFAULT_OVERLAP, DEFAULT_SIZE
 
 
 HELP_TEXT = """
@@ -57,6 +62,27 @@ Commands
 
   MCP tools are offered to the model automatically on every chat answer and task
   stage; 'mcp' is for inspecting/calling them by hand.
+
+  index build <path> [k=v ...]  Load → chunk → embed → store a document index
+  index list                    List saved indexes
+  index show [name]             Show an index's header and sample chunks
+  index search <query> [k=v]    Semantic search over an index (name=, k=)
+  index compare <path> [k=v]    Compare fixed vs structure-aware chunking (query=, size=, overlap=)
+  index delete <name>           Delete an index
+
+  Indexing builds a local vector index for retrieval (RAG). Embeddings use the
+  provider set by JARVIS_EMBED_PROVIDER (default 'ollama'; 'openrouter' optional).
+  Chunking has two strategies — 'fixed' (fixed-size with overlap) and 'structure'
+  (Markdown headings/sections) — selectable per build and comparable via
+  'index compare'. Indexes are JSON under ~/.jarvis/indexes/.
+
+  RAG chat mode: once an index is built, ground your thread's answers in it with
+    config set rag on
+    config set rag_index <name>      (a name from 'index list')
+  Then every prompt-mode message retrieves the top matching chunks, injects them
+  into the turn, and the answer cites them as `filename › section`. A per-turn
+  notice shows which sources were used. Turn it off with 'config set rag off' to
+  compare against the model's general (un-grounded) answer.
 
   task                          Show the active task (working memory)
   task new [name]               Create a task workspace and enter it
@@ -141,6 +167,11 @@ Parameters
   execution_agents   int    Agents executing the plan in parallel (1–8, default 1). 1 = sequential,
                             one step per turn; >1 runs independent steps concurrently, ordering
                             dependent ones via the plan's [after: …] annotations.
+
+  rag                bool   Ground chat answers in a local index (default off). When on, each
+                            prompt-mode message retrieves chunks and the answer cites the source.
+  rag_index          str    Name of the index to retrieve from (see 'index list').
+  rag_k              int    Chunks retrieved per message (1–20, default 5).
 """
 
 
@@ -706,6 +737,216 @@ def _handle_mcp_adhoc(sub, args, parse_kwargs) -> str:
             return "Usage: mcp call <tool> [key=value ...]"
         return asyncio.run(mcp_call(args[1], parse_kwargs(args[2:])))
     return "Usage: mcp list | mcp call <tool> [key=value ...]"
+
+
+# ── Document indexing (RAG) ───────────────────────────────────────────────────
+
+_INDEX_USAGE = (
+    "Usage:\n"
+    "  index build <path> [name=..] [strategy=fixed|structure] [size=..] [overlap=..] [provider=..] [model=..]\n"
+    "  index list\n"
+    "  index show [name]\n"
+    "  index search <query words…> [name=..] [k=5]\n"
+    "  index compare <path> [size=..] [overlap=..] [query=\"one word per token\"]\n"
+    "  index delete <name>"
+)
+
+
+def handle_index(args: list[str]) -> str:
+    """Build, inspect, search, and compare local document indexes.
+
+    Embeddings use the provider from JARVIS_EMBED_PROVIDER (default 'ollama').
+    Search re-uses the *index's own* provider/model (recorded in its header) so a
+    query is always embedded the same way the index was — the seam the follow-up
+    RAG task builds on.
+    """
+    sub = args[0].lower() if args else "list"
+    rest = args[1:]
+    try:
+        if sub == "build":
+            return _index_build(rest)
+        if sub == "list":
+            return _index_list()
+        if sub == "show":
+            return _index_show(rest)
+        if sub == "search":
+            return _index_search(rest)
+        if sub == "compare":
+            return _index_compare(rest)
+        if sub == "delete":
+            return _index_delete(rest)
+        return _INDEX_USAGE
+    except Exception as exc:  # boundary: report, don't crash the REPL
+        return f"Index error: {exc}"
+
+
+def _split_index_args(args: list[str]) -> tuple[list[str], dict]:
+    """Separate bare positional tokens from key=value options."""
+    positional: list[str] = []
+    opts: dict[str, str] = {}
+    for a in args:
+        if "=" in a and not a.startswith("="):
+            key, _, val = a.partition("=")
+            opts[key.strip().lower()] = val.strip()
+        else:
+            positional.append(a)
+    return positional, opts
+
+
+def _default_index_name(path: str, strategy: str) -> str:
+    base = Path(path).resolve().name or "index"
+    slug = re.sub(r"[^a-z0-9]+", "-", base.lower()).strip("-") or "index"
+    return f"{slug}-{strategy}"
+
+
+def _index_build(args: list[str]) -> str:
+    positional, opts = _split_index_args(args)
+    if not positional:
+        return _INDEX_USAGE
+    path = positional[0]
+    strategy = opts.get("strategy", "structure")
+    name = opts.get("name") or _default_index_name(path, strategy)
+    size = int(opts.get("size", DEFAULT_SIZE))
+    overlap = int(opts.get("overlap", DEFAULT_OVERLAP))
+    embedder = make_embedder(opts.get("provider"), opts.get("model"))
+    pipeline = IndexPipeline(embedder)
+    res = pipeline.build(path, name, strategy=strategy, size=size, overlap=overlap)
+    return (
+        f"Built index '{res.name}'\n"
+        f"  strategy:   {res.strategy}  (size={res.size}, overlap={res.overlap} chars)\n"
+        f"  embeddings: {res.provider} / {res.model}  ({res.dim}-dim)\n"
+        f"  documents:  {res.n_documents}\n"
+        f"  chunks:     {res.n_chunks}\n"
+        f"  saved to:   {res.path}\n"
+        f"Search it:  index search <your question> name={res.name}"
+    )
+
+
+def _index_list() -> str:
+    items = IndexStore().list_all()
+    if not items:
+        return "No indexes yet. Build one:  index build <path>"
+    sep = "─" * 78
+    lines = [f"Indexes ({len(items)})", sep,
+             f"  {'name':<26} {'strategy':<10} {'chunks':>6}  {'provider/model'}"]
+    for h in items:
+        pm = f"{h.get('provider', '?')}/{h.get('model', '?')}"
+        lines.append(
+            f"  {h.get('name', '?'):<26} {h.get('strategy', '?'):<10} "
+            f"{h.get('n_chunks', 0):>6}  {pm}"
+        )
+    lines.append(sep)
+    return "\n".join(lines)
+
+
+def _resolve_index_name(positional: list[str], opts: dict) -> str | None:
+    """Pick the index name from a positional arg, name=, or the most recent."""
+    name = opts.get("name") or (positional[0] if positional else None)
+    if name:
+        return name
+    items = IndexStore().list_all()
+    return items[0]["name"] if items else None
+
+
+def _index_show(args: list[str]) -> str:
+    positional, opts = _split_index_args(args)
+    name = _resolve_index_name(positional, opts)
+    if not name:
+        return "No indexes yet. Build one:  index build <path>"
+    loaded = IndexStore().load(name)
+    if loaded is None:
+        return f"No such index: '{name}'. Use 'index list'."
+    header, records = loaded
+    sep = "─" * 78
+    lines = [
+        f"Index '{name}'", sep,
+        f"  strategy:   {header.get('strategy')}  (size={header.get('size')}, overlap={header.get('overlap')})",
+        f"  embeddings: {header.get('provider')} / {header.get('model')}  ({header.get('dim')}-dim)",
+        f"  documents:  {header.get('n_documents')}   chunks: {header.get('n_chunks')}",
+        f"  created:    {header.get('created_at')}",
+        "", "  Sample chunks:",
+    ]
+    for rec in records[:5]:
+        md = rec["metadata"]
+        preview = " ".join(rec["text"].split())[:70]
+        lines.append(
+            f"    [{md['chunk_id']}]  {md['filename']} › {md['section']}  ({md['n_chars']} chars)"
+        )
+        lines.append(f"        {preview}…")
+    lines.append(sep)
+    return "\n".join(lines)
+
+
+def _index_search(args: list[str]) -> str:
+    positional, opts = _split_index_args(args)
+    query = " ".join(positional).strip()
+    if not query:
+        return "Usage: index search <query words…> [name=..] [k=5]"
+    name = opts.get("name") or _resolve_index_name([], opts)
+    if not name:
+        return "No indexes yet. Build one:  index build <path>"
+    store = IndexStore()
+    header = store.load_header(name)
+    if header is None:
+        return f"No such index: '{name}'. Use 'index list'."
+    k = int(opts.get("k", 5))
+    # Embed the query with the index's own provider/model for a valid comparison.
+    embedder = make_embedder(
+        opts.get("provider") or header.get("provider"),
+        opts.get("model") or header.get("model"),
+    )
+    results = IndexPipeline(embedder, store).search(name, query, k)
+    if not results:
+        return f"No results in index '{name}'."
+    sep = "─" * 78
+    lines = [f"Top {len(results)} for: “{query}”   (index '{name}')", sep]
+    for i, r in enumerate(results, 1):
+        md = r["metadata"]
+        preview = " ".join(r["text"].split())[:160]
+        lines.append(f"  {i}. score={r['score']:.4f}  {md['filename']} › {md['section']}")
+        lines.append(f"     [{md['chunk_id']}]  {preview}…")
+    lines.append(sep)
+    return "\n".join(lines)
+
+
+def _index_compare(args: list[str]) -> str:
+    positional, opts = _split_index_args(args)
+    if not positional:
+        return "Usage: index compare <path> [size=..] [overlap=..] [query=..]"
+    path = positional[0]
+    size = int(opts.get("size", DEFAULT_SIZE))
+    overlap = int(opts.get("overlap", DEFAULT_OVERLAP))
+    query = opts.get("query")
+    embedder = make_embedder(opts.get("provider"), opts.get("model"))
+    stats = IndexPipeline(embedder).compare(path, size=size, overlap=overlap, query=query)
+    sep = "─" * 78
+    lines = [
+        f"Chunking comparison for: {path}   (size={size}, overlap={overlap})", sep,
+        f"  {'strategy':<12} {'chunks':>7} {'avg':>7} {'min':>7} {'max':>7}   (chars)",
+    ]
+    for s in stats:
+        lines.append(
+            f"  {s.strategy:<12} {s.n_chunks:>7} {s.avg_chars:>7} {s.min_chars:>7} {s.max_chars:>7}"
+        )
+    if query:
+        lines += ["", f"  Top hits for “{query}”:"]
+        for s in stats:
+            lines.append(f"    [{s.strategy}]")
+            for score, filename, section in s.top_hits:
+                lines.append(f"      score={score:.4f}  {filename} › {section}")
+    lines.append(sep)
+    return "\n".join(lines)
+
+
+def _index_delete(args: list[str]) -> str:
+    positional, _ = _split_index_args(args)
+    if not positional:
+        return "Usage: index delete <name>"
+    name = positional[0]
+    return (
+        f"Deleted index '{name}'." if IndexStore().delete(name)
+        else f"No such index: '{name}'."
+    )
 
 
 def handle_session_chat(session_store: SessionStore) -> str:

@@ -181,6 +181,36 @@ def build_attachments_block(attachments: list[dict]) -> list[dict]:
     ]
 
 
+def build_rag_block(results: list[dict]) -> list[dict]:
+    """Return a pseudo-exchange carrying chunks retrieved from a local index.
+
+    Injected ahead of the conversation history (like attachments) so a RAG-enabled
+    chat turn answers from the user's knowledge base and cites it. Each result is
+    ``{score, text, metadata}`` from ``IndexPipeline.search``. Empty → no block, so
+    the turn falls back to a normal answer.
+    """
+    if not results:
+        return []
+    lines = [
+        "[Knowledge base — excerpts retrieved for this question]",
+        "Answer using the information below when it is relevant, and cite the "
+        "source as `filename › section`. If these excerpts don't contain the "
+        "answer, say so plainly instead of guessing.",
+    ]
+    for i, r in enumerate(results, 1):
+        md = r.get("metadata", {})
+        cite = f"{md.get('filename', '?')} › {md.get('section', '')}".rstrip(" ›")
+        lines.append("")
+        lines.append(f"[{i}] {cite}")
+        text = (r.get("text") or "").strip()
+        if text:
+            lines.append(text)
+    return [
+        {"role": "user", "content": "\n".join(lines)},
+        {"role": "assistant", "content": "Understood — I'll answer from the knowledge base excerpts and cite them."},
+    ]
+
+
 def _preceding_stage_output(task: dict[str, Any]) -> tuple[str, str] | None:
     """Return (stage, output) for the most recent completed stage before the current one."""
     outputs = task.get("stage_outputs") or {}
