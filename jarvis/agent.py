@@ -292,27 +292,42 @@ class JarvisAgent:
         notices = [n for n in (rag_notice, invariant_notice, extra_notice, profile_notice) if n]
         return response_text, notices
 
-    def _retrieve_rag(
+    def _rag_results(
         self, query: str, index_name: str | None, k: int
     ) -> tuple[list[dict], str | None]:
-        """Retrieve top-k chunks for a RAG-enabled turn. Returns (block, notice).
+        """Retrieve top-k chunks for a question. Returns (results, error).
 
         The query is embedded with the index's own provider/model (from its
-        header) so it matches how the index was built. Any failure (no index name,
-        index missing, embedder unreachable) returns an empty block plus a notice,
-        so the turn still answers — just without grounding.
+        header) so it matches how the index was built. ``error`` is a short reason
+        string when retrieval can't run (no index name, index missing, embedder
+        unreachable); callers decide whether to degrade or raise.
         """
         if not index_name:
-            return [], "RAG is on but no rag_index is set — answering without it. Set one: config set rag_index <name>"
+            return [], "no rag_index is set"
         try:
             store = IndexStore()
             header = store.load_header(index_name)
             if header is None:
-                return [], f"RAG: index '{index_name}' not found — answering without it. Build it: index build <path> name={index_name}"
+                return [], f"index '{index_name}' not found"
             embedder = make_embedder(header.get("provider"), header.get("model"))
-            results = IndexPipeline(embedder, store).search(index_name, query, k)
-        except Exception as exc:  # noqa: BLE001 — never break a chat turn on retrieval
-            return [], f"RAG retrieval failed ({exc}) — answering without it."
+            return IndexPipeline(embedder, store).search(index_name, query, k), None
+        except Exception as exc:  # noqa: BLE001 — caller degrades or reports
+            return [], f"retrieval failed ({exc})"
+
+    def _retrieve_rag(
+        self, query: str, index_name: str | None, k: int
+    ) -> tuple[list[dict], str | None]:
+        """Retrieve a RAG context block for a chat turn. Returns (block, notice).
+
+        Wraps ``_rag_results`` for the chat path: any failure returns an empty
+        block plus a human notice, so the turn still answers — just without
+        grounding.
+        """
+        results, error = self._rag_results(query, index_name, k)
+        if error:
+            if not index_name:
+                return [], "RAG is on but no rag_index is set — answering without it. Set one: config set rag_index <name>"
+            return [], f"RAG: {error} — answering without it."
         if not results:
             return [], f"RAG: no matching chunks in '{index_name}' — answering without it."
         sources = []
@@ -322,6 +337,49 @@ class JarvisAgent:
                 sources.append(fn)
         notice = f"RAG: grounded in {len(results)} chunk(s) from '{index_name}' — {', '.join(sources)}"
         return build_rag_block(results), notice
+
+    # ── One-shot A/B answering (no thread mutation) ─────────────────────────────
+
+    def answer(self, question: str, *, context_blocks: list[dict] | None = None) -> str:
+        """Answer a question once, outside any thread (history is not touched).
+
+        Used by the with/without-RAG comparison so both modes are identical except
+        for the injected ``context_blocks``. Intentionally skips solution-strategy
+        wrapping and the invariant rework loop to keep the A/B clean and cheap.
+        """
+        params = self._config.runtime
+        profile = self._profile.read_active()
+        invariants = self._invariants.read_active()
+        system_prompt = build_system_prompt(params, None, profile, invariants)
+        messages = (
+            [{"role": "system", "content": system_prompt}]
+            + (context_blocks or [])
+            + [{"role": "user", "content": question}]
+        )
+        return self._gateway.complete(messages, params, label="rag_compare").text.strip()
+
+    def rag_search(self, question: str, index_name: str | None, k: int = 5) -> list[dict]:
+        """Public retrieval seam: top-k scored chunks for a question (raises on error)."""
+        results, error = self._rag_results(question, index_name, k)
+        if error:
+            raise RuntimeError(error)
+        return results
+
+    def compare_rag(
+        self, question: str, index_name: str | None, k: int = 5
+    ) -> tuple[str, str | None, list[dict], str | None]:
+        """Answer a question both ways. Returns (plain, grounded, results, error).
+
+        ``plain`` is the model's un-grounded answer. ``grounded`` is the answer
+        with retrieved chunks injected (None if retrieval failed, with ``error``
+        explaining why). ``results`` are the retrieved chunks (for source scoring).
+        """
+        plain = self.answer(question)
+        results, error = self._rag_results(question, index_name, k)
+        if error:
+            return plain, None, [], error
+        grounded = self.answer(question, context_blocks=build_rag_block(results))
+        return plain, grounded, results, None
 
     def reset_history(self) -> None:
         """Clear the active thread's messages (thread record is preserved)."""

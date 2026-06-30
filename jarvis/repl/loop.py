@@ -46,6 +46,7 @@ from .commands import (
     handle_personalize,
     handle_mcp,
     handle_index,
+    handle_rag,
     run_onboarding,
     render_plan_progress,
 )
@@ -510,6 +511,9 @@ def _dispatch(
 
     if cmd == "index":
         return handle_index(args)
+
+    if cmd == "rag":
+        return handle_rag(args, agent, config_manager)
 
     if cmd == "session":
         if args:

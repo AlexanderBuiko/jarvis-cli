@@ -49,6 +49,13 @@ class TaskAttachCompletionTest(unittest.TestCase):
         # Accepting the suggestion produces the full command.
         self.assertEqual(apply_suggestion("task at", "attach"), "task attach")
 
+    def test_index_and_rag_commands_complete(self):
+        from jarvis.repl.input import get_suggestions
+        self.assertEqual(get_suggestions("rag "), ["ask", "eval"])
+        self.assertEqual(get_suggestions("index comp"), ["compare"])
+        # 'index s' is ambiguous between show and search.
+        self.assertEqual(set(get_suggestions("index s")), {"show", "search"})
+
 
 if __name__ == "__main__":
     unittest.main()

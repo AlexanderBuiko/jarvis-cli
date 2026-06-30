@@ -1,0 +1,52 @@
+[
+  {
+    "question": "How do I return a 404 error to the client in FastAPI?",
+    "expectation": ["HTTPException", "status_code", "raise", "404"],
+    "expected_sources": ["handling-errors.md"]
+  },
+  {
+    "question": "What HTTP status code does a path operation return by default, and how do I change it?",
+    "expectation": ["200", "status_code"],
+    "expected_sources": ["response-status-code.md"]
+  },
+  {
+    "question": "How do I add validation so a query parameter has a maximum length?",
+    "expectation": ["Query", "max_length"],
+    "expected_sources": ["query-params-str-validations.md"]
+  },
+  {
+    "question": "How can I run a function after the response has been sent?",
+    "expectation": ["BackgroundTasks", "add_task"],
+    "expected_sources": ["background-tasks.md"]
+  },
+  {
+    "question": "How do I serve static files such as CSS and JavaScript?",
+    "expectation": ["StaticFiles", "mount"],
+    "expected_sources": ["static-files.md"]
+  },
+  {
+    "question": "How do I receive an uploaded file in a request?",
+    "expectation": ["UploadFile", "File"],
+    "expected_sources": ["request-files.md"]
+  },
+  {
+    "question": "How do I enable CORS so a browser frontend can call my API?",
+    "expectation": ["CORSMiddleware", "allow_origins"],
+    "expected_sources": ["cors.md"]
+  },
+  {
+    "question": "How do I require a path parameter to be greater than zero?",
+    "expectation": ["Path", "gt"],
+    "expected_sources": ["path-params-numeric-validations.md"]
+  },
+  {
+    "question": "How do I write tests for a FastAPI application?",
+    "expectation": ["TestClient"],
+    "expected_sources": ["testing.md"]
+  },
+  {
+    "question": "How do I exclude fields that were not set from the response model?",
+    "expectation": ["response_model_exclude_unset"],
+    "expected_sources": ["response-model.md"]
+  }
+]
