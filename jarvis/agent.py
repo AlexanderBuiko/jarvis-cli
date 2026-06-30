@@ -22,8 +22,10 @@ from .prompt_builder.builder import (
     build_system_prompt,
     build_strategy_prompt,
     build_attachments_block,
+    build_rag_block,
     build_prompt_generation_request,
 )
+from .indexing import IndexPipeline, IndexStore, make_embedder
 from .conversation.service import ConversationService
 from .session.store import SessionStore
 from .session.task_store import TaskStore
@@ -176,9 +178,23 @@ class JarvisAgent:
         # state. Finished task results only enter a thread when explicitly attached
         # (`task attach`, or automatically when a task completes), injected here.
         attach_block = build_attachments_block(st.attachments)
+
+        # Retrieval-augmented generation: when enabled, retrieve chunks from the
+        # configured local index and inject them ahead of history (the same slot
+        # as attachments) so the answer is grounded in the knowledge base and
+        # cites it. Failures (no index, embedder down) degrade to a normal answer
+        # with a notice rather than breaking the turn.
+        rag_block: list[dict] = []
+        rag_notice: str | None = None
+        if params.get("rag"):
+            rag_block, rag_notice = self._retrieve_rag(
+                user_input, params.get("rag_index"), int(params.get("rag_k", 5))
+            )
+
         messages = (
             [{"role": "system", "content": system_prompt}]
             + attach_block
+            + rag_block
             + self._memory.build_chat_context(
                 st.history,
                 active_topic=active_topic,
@@ -273,8 +289,39 @@ class JarvisAgent:
             generated_prompt=generated_prompt,
         )
 
-        notices = [n for n in (invariant_notice, extra_notice, profile_notice) if n]
+        notices = [n for n in (rag_notice, invariant_notice, extra_notice, profile_notice) if n]
         return response_text, notices
+
+    def _retrieve_rag(
+        self, query: str, index_name: str | None, k: int
+    ) -> tuple[list[dict], str | None]:
+        """Retrieve top-k chunks for a RAG-enabled turn. Returns (block, notice).
+
+        The query is embedded with the index's own provider/model (from its
+        header) so it matches how the index was built. Any failure (no index name,
+        index missing, embedder unreachable) returns an empty block plus a notice,
+        so the turn still answers — just without grounding.
+        """
+        if not index_name:
+            return [], "RAG is on but no rag_index is set — answering without it. Set one: config set rag_index <name>"
+        try:
+            store = IndexStore()
+            header = store.load_header(index_name)
+            if header is None:
+                return [], f"RAG: index '{index_name}' not found — answering without it. Build it: index build <path> name={index_name}"
+            embedder = make_embedder(header.get("provider"), header.get("model"))
+            results = IndexPipeline(embedder, store).search(index_name, query, k)
+        except Exception as exc:  # noqa: BLE001 — never break a chat turn on retrieval
+            return [], f"RAG retrieval failed ({exc}) — answering without it."
+        if not results:
+            return [], f"RAG: no matching chunks in '{index_name}' — answering without it."
+        sources = []
+        for r in results:
+            fn = r["metadata"].get("filename", "?")
+            if fn not in sources:
+                sources.append(fn)
+        notice = f"RAG: grounded in {len(results)} chunk(s) from '{index_name}' — {', '.join(sources)}"
+        return build_rag_block(results), notice
 
     def reset_history(self) -> None:
         """Clear the active thread's messages (thread record is preserved)."""

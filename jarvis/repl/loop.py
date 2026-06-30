@@ -45,6 +45,7 @@ from .commands import (
     handle_profile_onboard,
     handle_personalize,
     handle_mcp,
+    handle_index,
     run_onboarding,
     render_plan_progress,
 )
@@ -506,6 +507,9 @@ def _dispatch(
 
     if cmd == "mcp":
         return handle_mcp(args, agent)
+
+    if cmd == "index":
+        return handle_index(args)
 
     if cmd == "session":
         if args:
