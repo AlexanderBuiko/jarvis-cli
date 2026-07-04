@@ -109,6 +109,10 @@ class JarvisAgent:
         # Working-memory task linked to the active thread (None when unlinked).
         self._active_task: dict | None = None
 
+        # Cross-encoder rerankers are expensive to construct (model load), so cache
+        # one per rerank kind for reuse across turns. Populated lazily.
+        self._reranker_cache: dict[str, object] = {}
+
         # Prompt tokens from the most recent API call — represents how much of
         # the context window is currently in use (system + full history + last user msg).
         self._last_context_tokens: int = 0
@@ -187,9 +191,7 @@ class JarvisAgent:
         rag_block: list[dict] = []
         rag_notice: str | None = None
         if params.get("rag"):
-            rag_block, rag_notice = self._retrieve_rag(
-                user_input, params.get("rag_index"), int(params.get("rag_k", 5))
-            )
+            rag_block, rag_notice = self._retrieve_rag(user_input, params)
 
         messages = (
             [{"role": "system", "content": system_prompt}]
@@ -314,29 +316,96 @@ class JarvisAgent:
         except Exception as exc:  # noqa: BLE001 — caller degrades or reports
             return [], f"retrieval failed ({exc})"
 
-    def _retrieve_rag(
-        self, query: str, index_name: str | None, k: int
-    ) -> tuple[list[dict], str | None]:
+    def _reranker(self, kind: str) -> tuple[object | None, str | None]:
+        """Return a cached reranker for ``kind`` (or None), plus an error string.
+
+        Constructing a cross-encoder loads a model, so instances are cached per
+        kind. A failure (e.g. sentence-transformers not installed) returns
+        (None, message) and the caller degrades to the un-reranked order.
+        """
+        if kind in ("off", None, ""):
+            return None, None
+        if kind in self._reranker_cache:
+            return self._reranker_cache[kind], None
+        try:
+            from .rag.enhance import make_reranker
+            reranker = make_reranker(kind)
+        except Exception as exc:  # noqa: BLE001 — degrade, don't crash retrieval
+            return None, f"reranker '{kind}' unavailable ({exc})"
+        self._reranker_cache[kind] = reranker
+        return reranker, None
+
+    def _retrieve_enhanced(
+        self, question: str, index_name: str | None, params: dict
+    ) -> tuple[list[dict], list[dict], str | None, dict]:
+        """Full retrieval with the second stage. Returns (raw, enhanced, error, info).
+
+        ``raw`` is the first-stage top-K (before filtering); ``enhanced`` is after
+        query rewrite (applied to the search), relevance filter, and optional
+        cross-encoder rerank. ``info`` carries the rewritten query, the rerank
+        kind, and any degradation notes (for notices and the eval).
+        """
+        from .rag.enhance import enhance_results, rewrite_query
+
+        info: dict = {"rewritten": None, "rerank": params.get("rag_rerank", "off"), "notes": []}
+        search_query = question
+        if params.get("rag_rewrite"):
+            try:
+                search_query = rewrite_query(self._gateway, question, params) or question
+                info["rewritten"] = search_query
+            except Exception as exc:  # noqa: BLE001 — rewrite is best-effort
+                info["notes"].append(f"query rewrite failed ({exc})")
+
+        k = int(params.get("rag_k", 5))
+        raw, error = self._rag_results(search_query, index_name, k)
+        if error:
+            return [], [], error, info
+
+        reranker, rerank_err = self._reranker(params.get("rag_rerank", "off"))
+        if rerank_err:
+            info["notes"].append(rerank_err)
+        enhanced = enhance_results(
+            raw,
+            min_score=params.get("rag_min_score"),
+            top_n=params.get("rag_top_n"),
+            reranker=reranker,
+            question=search_query,
+        )
+        return raw, enhanced, None, info
+
+    def _retrieve_rag(self, query: str, params: dict) -> tuple[list[dict], str | None]:
         """Retrieve a RAG context block for a chat turn. Returns (block, notice).
 
-        Wraps ``_rag_results`` for the chat path: any failure returns an empty
-        block plus a human notice, so the turn still answers — just without
-        grounding.
+        Runs the full enhanced retrieval; any failure returns an empty block plus
+        a human notice, so the turn still answers — just without grounding.
         """
-        results, error = self._rag_results(query, index_name, k)
+        index_name = params.get("rag_index")
+        raw, enhanced, error, info = self._retrieve_enhanced(query, index_name, params)
         if error:
             if not index_name:
                 return [], "RAG is on but no rag_index is set — answering without it. Set one: config set rag_index <name>"
             return [], f"RAG: {error} — answering without it."
-        if not results:
+        if not enhanced:
             return [], f"RAG: no matching chunks in '{index_name}' — answering without it."
-        sources = []
-        for r in results:
+        sources: list[str] = []
+        for r in enhanced:
             fn = r["metadata"].get("filename", "?")
             if fn not in sources:
                 sources.append(fn)
-        notice = f"RAG: grounded in {len(results)} chunk(s) from '{index_name}' — {', '.join(sources)}"
-        return build_rag_block(results), notice
+        detail = ""
+        if len(enhanced) != len(raw):
+            detail += f" (filtered {len(raw)}→{len(enhanced)})"
+        if info.get("rewritten"):
+            detail += f" [rewritten: {info['rewritten']}]"
+        if info.get("rerank") not in ("off", None):
+            detail += f" [rerank: {info['rerank']}]"
+        notice = (
+            f"RAG: grounded in {len(enhanced)} chunk(s) from '{index_name}' — "
+            f"{', '.join(sources)}{detail}"
+        )
+        for note in info.get("notes", []):
+            notice += f"\n  · {note}"
+        return build_rag_block(enhanced), notice
 
     # ── One-shot A/B answering (no thread mutation) ─────────────────────────────
 
@@ -365,21 +434,47 @@ class JarvisAgent:
             raise RuntimeError(error)
         return results
 
+    def _params_with_k(self, k: int | None) -> dict:
+        params = dict(self._config.runtime)
+        if k is not None:
+            params["rag_k"] = k
+        return params
+
+    def rag_retrieve(
+        self, question: str, index_name: str | None, k: int | None = None
+    ) -> tuple[list[dict], list[dict], str | None]:
+        """Public: (raw, enhanced, error) — first-stage top-K vs after the second
+        stage (filter/rerank). Used by the eval to measure precision before/after.
+        Second-stage settings come from the active config."""
+        raw, enhanced, error, _info = self._retrieve_enhanced(
+            question, index_name, self._params_with_k(k)
+        )
+        return raw, enhanced, error
+
+    def rag_retrieve_detailed(
+        self, question: str, index_name: str | None, k: int | None = None
+    ) -> tuple[list[dict], list[dict], str | None, dict]:
+        """Like ``rag_retrieve`` but also returns the ``info`` dict (rewritten
+        query, rerank kind, degradation notes) — for the `rag ask` display."""
+        return self._retrieve_enhanced(question, index_name, self._params_with_k(k))
+
     def compare_rag(
         self, question: str, index_name: str | None, k: int = 5
     ) -> tuple[str, str | None, list[dict], str | None]:
         """Answer a question both ways. Returns (plain, grounded, results, error).
 
         ``plain`` is the model's un-grounded answer. ``grounded`` is the answer
-        with retrieved chunks injected (None if retrieval failed, with ``error``
-        explaining why). ``results`` are the retrieved chunks (for source scoring).
+        with the *enhanced* retrieved chunks injected (None if retrieval failed).
+        ``results`` are those enhanced chunks (for source scoring).
         """
         plain = self.answer(question)
-        results, error = self._rag_results(question, index_name, k)
+        raw, enhanced, error, _info = self._retrieve_enhanced(
+            question, index_name, self._params_with_k(k)
+        )
         if error:
             return plain, None, [], error
-        grounded = self.answer(question, context_blocks=build_rag_block(results))
-        return plain, grounded, results, None
+        grounded = self.answer(question, context_blocks=build_rag_block(enhanced))
+        return plain, grounded, enhanced, None
 
     def reset_history(self) -> None:
         """Clear the active thread's messages (thread record is preserved)."""

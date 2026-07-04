@@ -32,6 +32,10 @@ _PARAM_PARSERS: dict[str, Any] = {
     "rag":               _parse_bool,
     "rag_index":         str,
     "rag_k":             int,
+    "rag_min_score":     float,
+    "rag_top_n":         int,
+    "rag_rerank":        str,
+    "rag_rewrite":       _parse_bool,
 }
 
 _PARAM_VALIDATORS: dict[str, tuple] = {
@@ -69,10 +73,27 @@ _PARAM_VALIDATORS: dict[str, tuple] = {
         lambda v: 1 <= v <= 8,
         "execution_agents must be between 1 and 8",
     ),
-    # Number of chunks retrieved per RAG-enabled chat turn.
+    # Number of chunks retrieved per RAG-enabled chat turn (top-K before filtering).
     "rag_k": (
         lambda v: 1 <= v <= 20,
         "rag_k must be between 1 and 20",
+    ),
+    # Relevance cutoff: retrieved chunks scoring below this (cosine, first stage)
+    # are dropped. Cosine of unit vectors is in [-1, 1]; relevant hits are > 0.
+    "rag_min_score": (
+        lambda v: -1.0 <= v <= 1.0,
+        "rag_min_score must be between -1.0 and 1.0",
+    ),
+    # Chunks kept after the second stage (top-N after filter/rerank).
+    "rag_top_n": (
+        lambda v: 1 <= v <= 20,
+        "rag_top_n must be between 1 and 20",
+    ),
+    # Second-stage strategy: 'off' (cosine order only) or 'cross_encoder'
+    # (sentence-transformers CrossEncoder — optional dependency).
+    "rag_rerank": (
+        lambda v: v in ("off", "cross_encoder"),
+        "rag_rerank must be one of: off, cross_encoder",
     ),
 }
 
