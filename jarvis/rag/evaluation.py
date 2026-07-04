@@ -26,10 +26,16 @@ adds ~2 chat calls per question.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..prompt_builder.builder import build_rag_block
+# Overlap bar above which an answer is judged to "match" its quotes.
+_MATCH_BAR = 0.3
+_MATCH_STOPWORDS = frozenset(
+    "the a an of to in on for and or is are how do you it with as at be this that your "
+    "can when what which from by not have will would should more also than then".split()
+)
 
 # Ships with the repo alongside the default knowledge_base corpus.
 DEFAULT_QUESTIONS_PATH = (
@@ -58,6 +64,11 @@ class QuestionResult:
     plain_coverage: float
     rag_coverage: float
     cited_expected: bool
+    has_sources: bool = False    # the RAG answer includes a Sources: list
+    has_quotes: bool = False     # the RAG answer includes Quotes:
+    quote_overlap: float = 0.0   # answer↔quotes lexical overlap (meaning-match proxy)
+    quote_match: bool = False    # overlap above the match bar
+    is_idk: bool = False         # answered "I don't know" (strict weak context)
     plain_answer: str = ""
     rag_answer: str | None = None
     error: str | None = None
@@ -107,6 +118,30 @@ class EvalReport:
         """Questions where RAG's expectation coverage beat the plain answer's."""
         return sum(1 for r in self.results if r.rag_coverage > r.plain_coverage)
 
+    @property
+    def _grounded(self) -> list[QuestionResult]:
+        """Answered ones that actually grounded (exclude IDK / errors)."""
+        return [r for r in self.results if r.rag_answer and not r.is_idk]
+
+    @property
+    def sources_rate(self) -> float:
+        g = self._grounded
+        return _mean([1.0 if r.has_sources else 0.0 for r in g]) if g else 0.0
+
+    @property
+    def quotes_rate(self) -> float:
+        g = self._grounded
+        return _mean([1.0 if r.has_quotes else 0.0 for r in g]) if g else 0.0
+
+    @property
+    def match_rate(self) -> float:
+        g = self._grounded
+        return _mean([1.0 if r.quote_match else 0.0 for r in g]) if g else 0.0
+
+    @property
+    def idk_count(self) -> int:
+        return sum(1 for r in self.results if r.is_idk)
+
 
 def load_questions(path: str | Path = DEFAULT_QUESTIONS_PATH) -> list[ControlQuestion]:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -141,13 +176,15 @@ def evaluate(
         before = _unique_sources(raw)
         after = _unique_sources(enhanced)
 
-        plain, grounded = "", None
-        if generate_answers and error is None:
+        plain, grounded, is_idk = "", None, False
+        if generate_answers:
             plain = agent.answer(q.question)
-            grounded = agent.answer(q.question, context_blocks=build_rag_block(enhanced))
-        elif generate_answers:
-            plain = agent.answer(q.question)  # still show the un-grounded answer
+            if error is None:
+                g = agent.grounded_answer(q.question, index_name, k)
+                grounded, is_idk = g["text"], g["idk"]
 
+        rag_text = grounded or ""
+        overlap = _quote_overlap(rag_text)
         results.append(QuestionResult(
             question=q.question,
             expected_sources=q.expected_sources,
@@ -158,8 +195,13 @@ def evaluate(
             precision_before=_precision(raw, q.expected_sources),
             precision_after=_precision(enhanced, q.expected_sources),
             plain_coverage=_coverage(q.expectation, plain),
-            rag_coverage=_coverage(q.expectation, grounded or ""),
-            cited_expected=_cites(q.expected_sources, grounded or ""),
+            rag_coverage=_coverage(q.expectation, rag_text),
+            cited_expected=_cites(q.expected_sources, rag_text),
+            has_sources=("Sources:" in rag_text),
+            has_quotes=("Quotes:" in rag_text),
+            quote_overlap=overlap,
+            quote_match=(overlap >= _MATCH_BAR),
+            is_idk=is_idk,
             plain_answer=plain,
             rag_answer=grounded,
             error=error,
@@ -173,21 +215,22 @@ def format_report(report: EvalReport) -> str:
     lines = [
         f"RAG control-question evaluation   (index '{report.index_name}', k={report.k}, "
         f"{report.n} questions)", sep,
-        f"  {'#':>2}  {'hit':>3}  {'prec→':>11}  {'plain':>5}  {'rag':>5}  {'cite':>4}  question",
-        f"  {'──':>2}  {'───':>3}  {'───────────':>11}  {'─────':>5}  {'───':>5}  {'────':>4}  ────────",
+        f"  {'#':>2}  {'hit':>3}  {'prec→':>11}  {'rag':>5}  {'src':>3}  {'quo':>3}  {'mat':>3}  question",
+        f"  {'──':>2}  {'───':>3}  {'───────────':>11}  {'───':>5}  {'───':>3}  {'───':>3}  {'───':>3}  ────────",
     ]
+    mark = lambda b: "✓" if b else "·"
     for i, r in enumerate(report.results, 1):
         hit = "✓" if r.retrieval_hit else "✗"
-        cite = "✓" if r.cited_expected else "·"
         prec = f"{pct(r.precision_before)}→{pct(r.precision_after)}"
-        q = r.question if len(r.question) <= 40 else r.question[:39] + "…"
+        q = r.question if len(r.question) <= 38 else r.question[:37] + "…"
         if report.answers_generated:
+            rag = "IDK" if r.is_idk else pct(r.rag_coverage)
             lines.append(
-                f"  {i:>2}  {hit:>3}  {prec:>11}  {pct(r.plain_coverage):>5}  "
-                f"{pct(r.rag_coverage):>5}  {cite:>4}  {q}"
+                f"  {i:>2}  {hit:>3}  {prec:>11}  {rag:>5}  {mark(r.has_sources):>3}  "
+                f"{mark(r.has_quotes):>3}  {mark(r.quote_match):>3}  {q}"
             )
         else:
-            lines.append(f"  {i:>2}  {hit:>3}  {prec:>11}  {'—':>5}  {'—':>5}  {'—':>4}  {q}")
+            lines.append(f"  {i:>2}  {hit:>3}  {prec:>11}  {'—':>5}  {'—':>3}  {'—':>3}  {'—':>3}  {q}")
         if r.error:
             lines.append(f"        ! {r.error}")
     lines += ["", sep, "Summary", sep,
@@ -201,6 +244,12 @@ def format_report(report: EvalReport) -> str:
             f"  Avg expectation coverage — with RAG:    {pct(report.avg_rag_coverage)}",
             f"  Answers citing an expected source:      {pct(report.citation_rate)}",
             f"  Questions improved by RAG:              {report.improved}/{report.n}",
+            "",
+            "  Mandatory-citations checks (over grounded answers):",
+            f"  · Answers with a Sources list:          {pct(report.sources_rate)}",
+            f"  · Answers with Quotes:                  {pct(report.quotes_rate)}",
+            f"  · Answer meaning matches its quotes:    {pct(report.match_rate)}",
+            f"  · 'I don't know' (weak context):        {report.idk_count}/{report.n}",
         ]
     else:
         lines.append("  (answer generation skipped — retrieval-only run)")
@@ -235,6 +284,26 @@ def _hit(expected: list[str], retrieved: list[str], chunks: list[dict]) -> bool:
     if not expected:
         return bool(chunks)
     return any(src in retrieved for src in expected)
+
+
+def _quote_overlap(rag_text: str) -> float:
+    """Lexical overlap between the answer body and its Quotes block — a proxy for
+    'does the answer's meaning match the quotes'. Fraction of the answer's
+    significant words that also appear in the quoted fragments."""
+    if "Quotes:" not in rag_text:
+        return 0.0
+    body = rag_text.split("\nSources:", 1)[0]
+    quotes = rag_text.split("Quotes:", 1)[1]
+    answer_words = _sig_words(body)
+    quote_words = _sig_words(quotes)
+    if not answer_words:
+        return 0.0
+    return len(answer_words & quote_words) / len(answer_words)
+
+
+def _sig_words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-zA-Z_]+", text.lower())
+            if len(w) > 3 and w not in _MATCH_STOPWORDS}
 
 
 def _precision(chunks: list[dict], expected: list[str]) -> float:

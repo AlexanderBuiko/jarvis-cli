@@ -183,6 +183,12 @@ Parameters
                             local sentence-transformers model (pip install sentence-transformers).
   rag_rewrite        bool   Rewrite the question into a better search query before retrieving (one
                             extra LLM call, default off).
+  rag_cite           bool   Append mandatory Sources + verbatim Quotes to grounded answers (default on).
+  rag_strict         bool   Closed-domain mode (default off). When on, weak/irrelevant context →
+                            "I don't know" + ask to clarify. When off (augmented), weak context just
+                            answers normally, so off-topic chat isn't hijacked.
+  rag_idk_threshold  float  Confidence bar (−1.0–1.0, default 0). If the best chunk's cosine score is
+                            below this, context is "weak" (see rag_strict).
 """
 
 
@@ -1009,8 +1015,6 @@ def _chunk_line(r: dict) -> str:
 
 
 def _rag_ask(args: list[str], agent: JarvisAgent, config_manager: ConfigManager) -> str:
-    from ..prompt_builder.builder import build_rag_block
-
     positional, opts = _split_index_args(args)
     question = " ".join(positional).strip()
     if not question:
@@ -1041,9 +1045,11 @@ def _rag_ask(args: list[str], agent: JarvisAgent, config_manager: ConfigManager)
         lines += [_chunk_line(r) for r in enhanced]
 
     plain = agent.answer(question)
-    grounded = agent.answer(question, context_blocks=build_rag_block(enhanced))
+    g = agent.grounded_answer(question, index_name=index, k=k)
+    rag_label = ("With RAG — I don't know (strict mode, weak context)"
+                 if g["idk"] else f"With RAG ({len(g['results'])} chunk(s), mandatory sources + quotes)")
     lines += ["", sep, "Without RAG (model's general knowledge)", sep, plain,
-              "", sep, f"With RAG ({len(enhanced)} chunk(s))", sep, grounded]
+              "", sep, rag_label, sep, g["text"]]
     return "\n".join(lines)
 
 

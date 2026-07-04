@@ -26,6 +26,7 @@ from .prompt_builder.builder import (
     build_prompt_generation_request,
 )
 from .indexing import IndexPipeline, IndexStore, make_embedder
+from .rag.cite import build_citations, idk_message
 from .conversation.service import ConversationService
 from .session.store import SessionStore
 from .session.task_store import TaskStore
@@ -190,36 +191,55 @@ class JarvisAgent:
         # with a notice rather than breaking the turn.
         rag_block: list[dict] = []
         rag_notice: str | None = None
+        rag_results: list[dict] = []
+        idk_response: str | None = None
         if params.get("rag"):
-            rag_block, rag_notice = self._retrieve_rag(user_input, params)
-
-        messages = (
-            [{"role": "system", "content": system_prompt}]
-            + attach_block
-            + rag_block
-            + self._memory.build_chat_context(
-                st.history,
-                active_topic=active_topic,
-                summary=st.summary,
-                summary_covered_turns=st.summary_covered_turns,
-                facts=st.facts,
-                topic_summaries=st.topic_summaries,
+            rag_block, rag_results, idk_response, rag_notice, _rag_info = self._rag_decide(
+                user_input, params
             )
-            + [{"role": "user", "content": final_user_message}]
-        )
 
-        completion = self._gateway.complete(
-            messages, params, label="final_answer", api_calls=api_calls, use_tools=True
-        )
-        response_text = completion.text.strip()
-
-        # Invariant validation (the "requirements linter"): when invariants are
-        # defined, check the reply in code and rework it once on a violation.
         invariant_notice: str | None = None
-        if invariants:
-            response_text, invariant_notice, completion = self._invariant_checker.validate(
-                invariants, messages, response_text, completion, params, api_calls
+        if idk_response is not None:
+            # Strict mode + weak context: deterministic "I don't know" — skip the
+            # model entirely (no cost). Still recorded as a normal turn below.
+            response_text = idk_response
+            finish_reason = "stop"
+        else:
+            messages = (
+                [{"role": "system", "content": system_prompt}]
+                + attach_block
+                + rag_block
+                + self._memory.build_chat_context(
+                    st.history,
+                    active_topic=active_topic,
+                    summary=st.summary,
+                    summary_covered_turns=st.summary_covered_turns,
+                    facts=st.facts,
+                    topic_summaries=st.topic_summaries,
+                )
+                + [{"role": "user", "content": final_user_message}]
             )
+
+            completion = self._gateway.complete(
+                messages, params, label="final_answer", api_calls=api_calls, use_tools=True
+            )
+            response_text = completion.text.strip()
+            finish_reason = completion.finish_reason
+
+            # Invariant validation (the "requirements linter"): when invariants are
+            # defined, check the reply in code and rework it once on a violation.
+            if invariants:
+                response_text, invariant_notice, completion = self._invariant_checker.validate(
+                    invariants, messages, response_text, completion, params, api_calls
+                )
+                finish_reason = completion.finish_reason
+
+            # Mandatory citations: append verbatim Sources + Quotes for the chunks
+            # the grounded answer used (hybrid — the model marked them with [n]).
+            if rag_results and params.get("rag_cite", True):
+                appendix = build_citations(rag_results, response_text, user_input)
+                if appendix:
+                    response_text = f"{response_text}\n\n{appendix}"
 
         # Persist user/assistant turn; tag with topic when the topics strategy is active.
         user_msg: dict = {"role": "user", "content": user_input}
@@ -264,12 +284,15 @@ class JarvisAgent:
         profile_notice = self._personalization.maybe_nudge()
 
         # Accounting: every LLM call this turn is billed; the last answer-type
-        # call reflects the shown response and its context-window fill.
-        answer_calls = [c for c in api_calls if c["label"] in _ANSWER_LABELS]
-        last_usage = (answer_calls or api_calls)[-1]["response"].get("usage") or {}
-        # native_tokens_total is the model-side count after chat-template expansion;
-        # falls back to total_tokens when the provider does not return native counts.
-        native_ctx: int | None = last_usage.get("native_tokens_total") or last_usage.get("total_tokens") or None
+        # call reflects the shown response and its context-window fill. A strict
+        # "I don't know" turn makes no LLM call (api_calls empty) → zero cost.
+        native_ctx: int | None = None
+        if api_calls:
+            answer_calls = [c for c in api_calls if c["label"] in _ANSWER_LABELS]
+            last_usage = (answer_calls or api_calls)[-1]["response"].get("usage") or {}
+            # native_tokens_total is the model-side count after chat-template expansion;
+            # falls back to total_tokens when the provider does not return native counts.
+            native_ctx = last_usage.get("native_tokens_total") or last_usage.get("total_tokens") or None
         self._last_context_tokens = native_ctx or 0
 
         billing_tokens = sum((c["response"].get("usage") or {}).get("total_tokens") or 0 for c in api_calls)
@@ -286,7 +309,7 @@ class JarvisAgent:
             user_input=user_input,
             config_snapshot=dict(params),
             response=response_text,
-            finish_reason=completion.finish_reason,
+            finish_reason=finish_reason,
             api_calls=api_calls,
             generated_prompt=generated_prompt,
         )
@@ -373,20 +396,36 @@ class JarvisAgent:
         )
         return raw, enhanced, None, info
 
-    def _retrieve_rag(self, query: str, params: dict) -> tuple[list[dict], str | None]:
-        """Retrieve a RAG context block for a chat turn. Returns (block, notice).
+    def _rag_decide(
+        self, question: str, params: dict
+    ) -> tuple[list[dict], list[dict], str | None, str | None, dict]:
+        """Decide how a RAG turn is handled. Returns
+        ``(rag_block, results, idk_text, notice, info)``.
 
-        Runs the full enhanced retrieval; any failure returns an empty block plus
-        a human notice, so the turn still answers — just without grounding.
+        - retrieval error / no index → answer without grounding (block empty).
+        - **strong** context (best cosine ≥ ``rag_idk_threshold``) → grounded block
+          + the chunks to cite.
+        - **weak** context: strict mode (``rag_strict``) → ``idk_text`` set (the
+          deterministic "I don't know"); augmented (default) → answer without
+          grounding. This is what stops the gate from hijacking off-topic chat.
         """
         index_name = params.get("rag_index")
-        raw, enhanced, error, info = self._retrieve_enhanced(query, index_name, params)
+        raw, enhanced, error, info = self._retrieve_enhanced(question, index_name, params)
         if error:
             if not index_name:
-                return [], "RAG is on but no rag_index is set — answering without it. Set one: config set rag_index <name>"
-            return [], f"RAG: {error} — answering without it."
-        if not enhanced:
-            return [], f"RAG: no matching chunks in '{index_name}' — answering without it."
+                return [], [], None, "RAG is on but no rag_index is set — answering without it. Set one: config set rag_index <name>", info
+            return [], [], None, f"RAG: {error} — answering without it.", info
+
+        threshold = params.get("rag_idk_threshold") or 0.0
+        best = max((r.get("score", 0.0) for r in enhanced), default=0.0)
+        if not enhanced or best < threshold:
+            if params.get("rag_strict"):
+                idk = idk_message(question, best, threshold)
+                return [], [], idk, f"RAG: weak context (best {best:.2f} < {threshold:.2f}) — I don't know (strict).", info
+            reason = "no matching chunks" if not enhanced else f"weak context (best {best:.2f} < {threshold:.2f})"
+            return [], [], None, f"RAG: {reason} in '{index_name}' — answered without grounding.", info
+
+        # Strong context → ground and cite.
         sources: list[str] = []
         for r in enhanced:
             fn = r["metadata"].get("filename", "?")
@@ -405,7 +444,30 @@ class JarvisAgent:
         )
         for note in info.get("notes", []):
             notice += f"\n  · {note}"
-        return build_rag_block(enhanced), notice
+        return build_rag_block(enhanced), enhanced, None, notice, info
+
+    def grounded_answer(
+        self, question: str, index_name: str | None = None, k: int | None = None
+    ) -> dict:
+        """One-shot grounded answer with mandatory citations, or the strict IDK /
+        augmented un-grounded fallback. Returns a dict with keys: text, grounded,
+        idk, results, notice. Used by `rag ask`, `compare_rag`, and the eval."""
+        params = dict(self._config.runtime)
+        if k is not None:
+            params["rag_k"] = k
+        if index_name is not None:
+            params["rag_index"] = index_name
+        block, results, idk_text, notice, _info = self._rag_decide(question, params)
+        if idk_text is not None:
+            return {"text": idk_text, "grounded": False, "idk": True, "results": [], "notice": notice}
+        if block:
+            answer = self.answer(question, context_blocks=block)
+            if params.get("rag_cite", True):
+                appendix = build_citations(results, answer, question)
+                if appendix:
+                    answer = f"{answer}\n\n{appendix}"
+            return {"text": answer, "grounded": True, "idk": False, "results": results, "notice": notice}
+        return {"text": self.answer(question), "grounded": False, "idk": False, "results": [], "notice": notice}
 
     # ── One-shot A/B answering (no thread mutation) ─────────────────────────────
 
@@ -463,18 +525,13 @@ class JarvisAgent:
     ) -> tuple[str, str | None, list[dict], str | None]:
         """Answer a question both ways. Returns (plain, grounded, results, error).
 
-        ``plain`` is the model's un-grounded answer. ``grounded`` is the answer
-        with the *enhanced* retrieved chunks injected (None if retrieval failed).
-        ``results`` are those enhanced chunks (for source scoring).
+        ``plain`` is the model's un-grounded answer. ``grounded`` is the composed
+        RAG answer (with mandatory Sources + Quotes when it grounds, or the strict
+        IDK / augmented fallback). ``results`` are the chunks it cited.
         """
         plain = self.answer(question)
-        raw, enhanced, error, _info = self._retrieve_enhanced(
-            question, index_name, self._params_with_k(k)
-        )
-        if error:
-            return plain, None, [], error
-        grounded = self.answer(question, context_blocks=build_rag_block(enhanced))
-        return plain, grounded, enhanced, None
+        g = self.grounded_answer(question, index_name=index_name, k=k)
+        return plain, g["text"], g["results"], None
 
     def reset_history(self) -> None:
         """Clear the active thread's messages (thread record is preserved)."""
