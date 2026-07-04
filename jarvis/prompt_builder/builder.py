@@ -193,9 +193,13 @@ def build_rag_block(results: list[dict]) -> list[dict]:
         return []
     lines = [
         "[Knowledge base — excerpts retrieved for this question]",
-        "Answer using the information below when it is relevant, and cite the "
-        "source as `filename › section`. If these excerpts don't contain the "
-        "answer, say so plainly instead of guessing.",
+        "Use these excerpts as your primary source. Synthesize the best answer you "
+        "can from them — combine multiple excerpts, and draw reasonable conclusions "
+        "they support even if no single excerpt states it verbatim. Cite what you "
+        "use as `filename › section`. If the excerpts only partially cover the "
+        "question, answer with what they do provide and briefly note what's missing "
+        "— don't refuse. Only if none of the excerpts are relevant at all, say the "
+        "knowledge base doesn't cover it.",
     ]
     for i, r in enumerate(results, 1):
         md = r.get("metadata", {})

@@ -175,7 +175,14 @@ Parameters
   rag                bool   Ground chat answers in a local index (default off). When on, each
                             prompt-mode message retrieves chunks and the answer cites the source.
   rag_index          str    Name of the index to retrieve from (see 'index list').
-  rag_k              int    Chunks retrieved per message (1–20, default 5).
+  rag_k              int    Candidates retrieved per message — top-K before filtering (1–20, default 5).
+  rag_min_score      float  Relevance cutoff: drop chunks with cosine < this (−1.0–1.0, default 0 = off).
+  rag_top_n          int    Chunks kept after filter/rerank — top-N (1–20, default: keep all K).
+  rag_rerank         off | cross_encoder
+                            Second stage. 'off' = cosine order only. 'cross_encoder' reorders with a
+                            local sentence-transformers model (pip install sentence-transformers).
+  rag_rewrite        bool   Rewrite the question into a better search query before retrieving (one
+                            extra LLM call, default off).
 """
 
 
@@ -987,7 +994,23 @@ def _resolve_rag_index(opts: dict, config_manager: ConfigManager) -> str | None:
     return items[0]["name"] if items else None
 
 
+def _resolve_rag_k(opts: dict, config_manager: ConfigManager) -> int:
+    """Top-K from an explicit k=, else the configured rag_k, else 5."""
+    if opts.get("k"):
+        return int(opts["k"])
+    return int(config_manager.runtime.get("rag_k") or 5)
+
+
+def _chunk_line(r: dict) -> str:
+    md = r.get("metadata", {})
+    score = r.get("rerank_score", r.get("score", 0.0))
+    tag = "rerank" if "rerank_score" in r else "cos"
+    return f"      {tag}={score:.3f}  {md.get('filename', '?')} › {md.get('section', '')}"
+
+
 def _rag_ask(args: list[str], agent: JarvisAgent, config_manager: ConfigManager) -> str:
+    from ..prompt_builder.builder import build_rag_block
+
     positional, opts = _split_index_args(args)
     question = " ".join(positional).strip()
     if not question:
@@ -995,20 +1018,32 @@ def _rag_ask(args: list[str], agent: JarvisAgent, config_manager: ConfigManager)
     index = _resolve_rag_index(opts, config_manager)
     if not index:
         return "No index to retrieve from. Build one:  index build <path>"
-    k = int(opts.get("k", 5))
-    plain, grounded, results, error = agent.compare_rag(question, index, k)
+    k = _resolve_rag_k(opts, config_manager)
+
+    raw, enhanced, error, info = agent.rag_retrieve_detailed(question, index, k)
     sep = "─" * 78
-    lines = [f"Question: {question}", f"Index: {index}  (k={k})", "",
-             sep, "Without RAG (model's general knowledge)", sep, plain, ""]
+    lines = [f"Question: {question}", f"Index: {index}  (k={k})"]
+    if info.get("rewritten"):
+        lines.append(f"Rewritten query: {info['rewritten']}")
+    for note in info.get("notes", []):
+        lines.append(f"Note: {note}")
+
     if error:
-        lines += [sep, f"With RAG — unavailable: {error}", sep]
-    else:
-        srcs = []
-        for r in results:
-            fn = r["metadata"].get("filename", "?")
-            if fn not in srcs:
-                srcs.append(fn)
-        lines += [sep, f"With RAG (sources: {', '.join(srcs)})", sep, grounded or "(no answer)"]
+        lines += ["", sep, f"Retrieval unavailable: {error}", sep,
+                  "Without RAG (model's general knowledge)", sep, agent.answer(question)]
+        return "\n".join(lines)
+
+    # Show the second-stage effect: what was retrieved vs. what survived.
+    lines += ["", f"Retrieved (top-{len(raw)}):"]
+    lines += [_chunk_line(r) for r in raw]
+    if len(enhanced) != len(raw) or any("rerank_score" in r for r in enhanced):
+        lines += [f"After filter/rerank ({len(enhanced)}):"]
+        lines += [_chunk_line(r) for r in enhanced]
+
+    plain = agent.answer(question)
+    grounded = agent.answer(question, context_blocks=build_rag_block(enhanced))
+    lines += ["", sep, "Without RAG (model's general knowledge)", sep, plain,
+              "", sep, f"With RAG ({len(enhanced)} chunk(s))", sep, grounded]
     return "\n".join(lines)
 
 
@@ -1019,7 +1054,7 @@ def _rag_eval(args: list[str], agent: JarvisAgent, config_manager: ConfigManager
     index = _resolve_rag_index(opts, config_manager)
     if not index:
         return "No index to evaluate against. Build one:  index build <path>"
-    k = int(opts.get("k", 5))
+    k = _resolve_rag_k(opts, config_manager)
     generate = opts.get("answers", "on").lower() not in ("off", "false", "no", "0")
     questions = load_questions(opts.get("questions") or DEFAULT_QUESTIONS_PATH)
     report = evaluate(agent, questions, index, k=k, generate_answers=generate)
