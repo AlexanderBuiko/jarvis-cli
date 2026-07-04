@@ -36,6 +36,9 @@ _PARAM_PARSERS: dict[str, Any] = {
     "rag_top_n":         int,
     "rag_rerank":        str,
     "rag_rewrite":       _parse_bool,
+    "rag_cite":          _parse_bool,
+    "rag_strict":        _parse_bool,
+    "rag_idk_threshold": float,
 }
 
 _PARAM_VALIDATORS: dict[str, tuple] = {
@@ -94,6 +97,13 @@ _PARAM_VALIDATORS: dict[str, tuple] = {
     "rag_rerank": (
         lambda v: v in ("off", "cross_encoder"),
         "rag_rerank must be one of: off, cross_encoder",
+    ),
+    # Confidence bar: if the best retrieved chunk's cosine score is below this,
+    # the context is "weak". In strict mode → "I don't know"; otherwise the turn
+    # answers without grounding. 0 (default) treats any retrieval as confident.
+    "rag_idk_threshold": (
+        lambda v: -1.0 <= v <= 1.0,
+        "rag_idk_threshold must be between -1.0 and 1.0",
     ),
 }
 
