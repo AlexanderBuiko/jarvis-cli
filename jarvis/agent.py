@@ -489,6 +489,16 @@ class JarvisAgent:
         )
         return self._gateway.complete(messages, params, label="rag_compare").text.strip()
 
+    def judge_quote_support(self, answer: str, quotes: str) -> bool:
+        """LLM judge: are the answer's claims supported by its cited quotes?
+
+        Used by the eval's meaning-match check (one model call). Delegates to
+        jarvis.rag.judge, running through this agent's gateway and model."""
+        from .rag.judge import judge_supported
+        return judge_supported(
+            self._gateway, answer, quotes, model=self._config.runtime.get("model")
+        )
+
     def rag_search(self, question: str, index_name: str | None, k: int = 5) -> list[dict]:
         """Public retrieval seam: top-k scored chunks for a question (raises on error)."""
         results, error = self._rag_results(question, index_name, k)
