@@ -55,8 +55,8 @@ _PARAM_VALIDATORS: dict[str, tuple] = {
         "solution_strategy must be one of: direct, step_by_step, prompt_generation, expert_panel",
     ),
     "context_strategy": (
-        lambda v: v in ("none", "compression", "sliding_window", "sticky_facts", "topics"),
-        "context_strategy must be one of: none, compression, sliding_window, sticky_facts, topics",
+        lambda v: v in ("none", "compression", "sliding_window", "sticky_facts", "dialogue_state", "topics"),
+        "context_strategy must be one of: none, compression, sliding_window, sticky_facts, dialogue_state, topics",
     ),
     "window_size": (
         lambda v: v >= 1,

@@ -20,7 +20,13 @@ from __future__ import annotations
 
 import re
 
-_CITE_RE = re.compile(r"\[(\d+)\]")
+# Inline citation bracket: one or more numbers, e.g. "[1]", "[3, 1]", "[1,2,3]".
+_CITE_RE = re.compile(r"\[([\d,\s]+)\]")
+# A standalone header line the model sometimes emits to start its own citation
+# block (optionally wrapped in markdown **): "Sources:", "**References**", etc.
+_MODEL_CITE_HEADER = re.compile(
+    r"(?im)^\s*\*{0,2}(sources|references|citations|quotes)\*{0,2}\s*:?\s*$"
+)
 _MAX_QUOTE_CHARS = 220
 _STOPWORDS = frozenset(
     "the a an of to in on for and or is are how do i you it with as at be this that "
@@ -29,13 +35,27 @@ _STOPWORDS = frozenset(
 
 
 def cited_indices(answer_text: str, n: int) -> list[int]:
-    """1-based excerpt numbers the answer referenced via [n], within range."""
+    """1-based excerpt numbers the answer referenced via [n], within range.
+
+    Handles multi-number brackets like "[3, 1]" and "[1,2,3]", not just "[1]".
+    """
     seen: list[int] = []
-    for m in _CITE_RE.findall(answer_text or ""):
-        i = int(m)
-        if 1 <= i <= n and i not in seen:
-            seen.append(i)
+    for group in _CITE_RE.findall(answer_text or ""):
+        for num in re.findall(r"\d+", group):
+            i = int(num)
+            if 1 <= i <= n and i not in seen:
+                seen.append(i)
     return seen
+
+
+def strip_trailing_citations(answer: str) -> str:
+    """Remove a model-generated Sources/References/Quotes block so the code-owned
+    appendix isn't duplicated. Cuts from the first standalone citation-header line
+    to the end; inline ``[n]`` markers in the prose are left intact."""
+    m = _MODEL_CITE_HEADER.search(answer)
+    if m is None:
+        return answer.rstrip()
+    return answer[: m.start()].rstrip()
 
 
 def pick_quote(text: str, question: str) -> str:
@@ -54,20 +74,25 @@ def pick_quote(text: str, question: str) -> str:
 
 
 def build_citations(results: list[dict], answer_text: str, question: str) -> str:
-    """The verbatim Sources + Quotes appendix for the chunks the answer used."""
+    """The verbatim Sources + Quotes appendix for the chunks the answer used.
+
+    The quote numbers match the ``[n]`` the model wrote inline — i.e. the chunk's
+    original position in the retrieved set — so a "[3]" in the prose maps to the
+    "[3]" quote. When the model cited nothing, all chunks are listed in order.
+    """
     if not results:
         return ""
     picked = cited_indices(answer_text, len(results))
-    used = [results[i - 1] for i in picked] if picked else results
+    # (display_number, chunk) — keep the model's own numbering when it cited.
+    pairs = [(i, results[i - 1]) for i in picked] if picked else list(enumerate(results, 1))
 
     source_lines, quote_lines, seen = [], [], set()
-    for n, r in enumerate(used, 1):
+    for n, r in pairs:
         md = r.get("metadata", {})
         cite = f"{md.get('filename', '?')} › {md.get('section', '')}".rstrip(" ›")
         cid = md.get("chunk_id", "?")
-        key = cid
-        if key not in seen:
-            seen.add(key)
+        if cid not in seen:
+            seen.add(cid)
             source_lines.append(f"  - {cite}  ({cid})")
         quote = pick_quote(r.get("text", ""), question)
         quote_lines.append(f'  [{n}] {cite}: "{quote}"')
