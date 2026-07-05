@@ -13,6 +13,8 @@ judge, so it is cheap and testable):
 3. **Expectation coverage** (optional, ``generate_answers``) — how much of each
    answer's expected key phrases are present, without RAG vs with (enhanced) RAG.
 4. **Citation** — does the grounded answer name an expected source?
+5. **Meaning match** — an LLM judge decides whether the answer's claims are
+   supported by the quotes it cited (one extra model call per grounded answer).
 
 Each question is a `ControlQuestion`:
 
@@ -26,16 +28,8 @@ adds ~2 chat calls per question.
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
-
-# Overlap bar above which an answer is judged to "match" its quotes.
-_MATCH_BAR = 0.3
-_MATCH_STOPWORDS = frozenset(
-    "the a an of to in on for and or is are how do you it with as at be this that your "
-    "can when what which from by not have will would should more also than then".split()
-)
 
 # Ships with the repo alongside the default knowledge_base corpus.
 DEFAULT_QUESTIONS_PATH = (
@@ -66,8 +60,7 @@ class QuestionResult:
     cited_expected: bool
     has_sources: bool = False    # the RAG answer includes a Sources: list
     has_quotes: bool = False     # the RAG answer includes Quotes:
-    quote_overlap: float = 0.0   # answer↔quotes lexical overlap (meaning-match proxy)
-    quote_match: bool = False    # overlap above the match bar
+    quote_match: bool = False    # LLM judge: answer supported by its quotes
     is_idk: bool = False         # answered "I don't know" (strict weak context)
     plain_answer: str = ""
     rag_answer: str | None = None
@@ -176,15 +169,25 @@ def evaluate(
         before = _unique_sources(raw)
         after = _unique_sources(enhanced)
 
-        plain, grounded, is_idk = "", None, False
+        plain, grounded, is_idk, g_results = "", None, False, []
         if generate_answers:
             plain = agent.answer(q.question)
             if error is None:
                 g = agent.grounded_answer(q.question, index_name, k)
-                grounded, is_idk = g["text"], g["idk"]
+                grounded, is_idk, g_results = g["text"], g["idk"], g["results"]
 
         rag_text = grounded or ""
-        overlap = _quote_overlap(rag_text)
+        # Meaning-match: an LLM judge decides whether the answer's claims are
+        # supported by the retrieved evidence (one model call per grounded answer).
+        # It judges against the FULL cited chunk text, not the truncated display
+        # quotes — short fragments can't support a multi-sentence answer, which
+        # would make the judge say "no" even for well-grounded answers.
+        quote_match = False
+        if grounded and not is_idk and g_results:
+            body, _ = _split_answer(rag_text)
+            evidence = "\n\n".join(r.get("text", "") for r in g_results)
+            quote_match = agent.judge_quote_support(body, evidence)
+
         results.append(QuestionResult(
             question=q.question,
             expected_sources=q.expected_sources,
@@ -199,8 +202,7 @@ def evaluate(
             cited_expected=_cites(q.expected_sources, rag_text),
             has_sources=("Sources:" in rag_text),
             has_quotes=("Quotes:" in rag_text),
-            quote_overlap=overlap,
-            quote_match=(overlap >= _MATCH_BAR),
+            quote_match=quote_match,
             is_idk=is_idk,
             plain_answer=plain,
             rag_answer=grounded,
@@ -248,7 +250,7 @@ def format_report(report: EvalReport) -> str:
             "  Mandatory-citations checks (over grounded answers):",
             f"  · Answers with a Sources list:          {pct(report.sources_rate)}",
             f"  · Answers with Quotes:                  {pct(report.quotes_rate)}",
-            f"  · Answer meaning matches its quotes:    {pct(report.match_rate)}",
+            f"  · Answer supported by its quotes (LLM judge): {pct(report.match_rate)}",
             f"  · 'I don't know' (weak context):        {report.idk_count}/{report.n}",
         ]
     else:
@@ -286,24 +288,11 @@ def _hit(expected: list[str], retrieved: list[str], chunks: list[dict]) -> bool:
     return any(src in retrieved for src in expected)
 
 
-def _quote_overlap(rag_text: str) -> float:
-    """Lexical overlap between the answer body and its Quotes block — a proxy for
-    'does the answer's meaning match the quotes'. Fraction of the answer's
-    significant words that also appear in the quoted fragments."""
-    if "Quotes:" not in rag_text:
-        return 0.0
-    body = rag_text.split("\nSources:", 1)[0]
-    quotes = rag_text.split("Quotes:", 1)[1]
-    answer_words = _sig_words(body)
-    quote_words = _sig_words(quotes)
-    if not answer_words:
-        return 0.0
-    return len(answer_words & quote_words) / len(answer_words)
-
-
-def _sig_words(text: str) -> set[str]:
-    return {w for w in re.findall(r"[a-zA-Z_]+", text.lower())
-            if len(w) > 3 and w not in _MATCH_STOPWORDS}
+def _split_answer(rag_text: str) -> tuple[str, str]:
+    """Split a composed RAG answer into (answer_body, quotes_block)."""
+    body = rag_text.split("\nSources:", 1)[0].strip()
+    quotes = rag_text.split("Quotes:", 1)[1].strip() if "Quotes:" in rag_text else ""
+    return body, quotes
 
 
 def _precision(chunks: list[dict], expected: list[str]) -> float:

@@ -122,8 +122,10 @@ Read the new columns and the summary:
 - Summary block **"Mandatory-citations checks"**:
   - **Answers with a Sources list** — should be **100%** (mandatory).
   - **Answers with Quotes** — should be **100%**.
-  - **Answer meaning matches its quotes** — the lexical-overlap proxy for "does the
-    answer reflect the quotes"; higher is better.
+  - **Answer supported by its quotes (LLM judge)** — a model call per grounded
+    answer decides whether the answer's claims are actually supported by the quotes
+    it cited (meaning, not word overlap). Higher is better. This adds ~1 chat call
+    per question on top of the answer generation.
 
 To see the "I don't know" behavior show up in the eval, run it strict with a high
 bar (most control questions will then decline, proving the gate fires):
@@ -146,6 +148,6 @@ Watch the `rag` column show `IDK` and the summary line
 |---|---|---|
 | Sources in every answer | grounded answer / `rag eval` "Sources list" | 100% |
 | Quotes in every answer | grounded answer / `rag eval` "Quotes" | 100% |
-| Meaning matches quotes | `rag eval` "meaning matches" | high (real model) |
+| Answer supported by its quotes | `rag eval` "supported by its quotes (LLM judge)" | high (real model) |
 | "I don't know" on weak context | strict mode + high threshold | declines + asks to clarify |
 | Normal chat not hijacked | augmented (default), off-topic question | normal answer |

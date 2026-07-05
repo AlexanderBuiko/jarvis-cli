@@ -56,6 +56,23 @@ class CiteUnitTest(unittest.TestCase):
         self.assertIn("clarify", msg.lower())
 
 
+class JudgeTest(unittest.TestCase):
+    def _gw(self, reply):
+        from jarvis.llm.gateway import LLMGateway
+        return LLMGateway(FakeEngine(scripted=[reply]))
+
+    def test_yes_and_no_parse(self):
+        from jarvis.rag.judge import judge_supported
+        self.assertTrue(judge_supported(self._gw("YES, clearly supported."), "a", "q"))
+        self.assertFalse(judge_supported(self._gw("NO — unsupported"), "a", "q"))
+
+    def test_empty_inputs_are_false_without_calling(self):
+        from jarvis.rag.judge import judge_supported
+        engine_reply = self._gw("YES")
+        self.assertFalse(judge_supported(engine_reply, "", "q"))
+        self.assertFalse(judge_supported(engine_reply, "a", ""))
+
+
 class ConfigTest(unittest.TestCase):
     def test_new_params(self):
         cfg = ConfigManager()
@@ -157,10 +174,12 @@ class EvalChecksTest(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_eval_reports_sources_quotes_and_match(self):
-        # A concise, chunk-derived answer whose words appear in the quoted fragment.
+        # Fake model: grounded answer for the RAG turn; "YES" for the judge call.
         def responder(messages, params):
             blob = "\n".join((m.get("content") or "") for m in messages)
-            if "Knowledge base — excerpts" in blob:
+            if "supported by the sources" in blob:         # the LLM judge
+                return "YES"
+            if "Knowledge base — excerpts" in blob:        # the grounded answer
                 return "You raise HTTPException with status_code 404 to return the error."
             return "generic"
         agent = JarvisAgent(FakeEngine(responder=responder), ConfigManager())
