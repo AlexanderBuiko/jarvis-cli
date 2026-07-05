@@ -197,10 +197,13 @@ def build_rag_block(results: list[dict]) -> list[dict]:
         "can from them — combine multiple excerpts, and draw reasonable conclusions "
         "they support even if no single excerpt states it verbatim. As you write, "
         "mark each excerpt you rely on by its number in square brackets, e.g. [1] or "
-        "[2], so the source can be attributed. If the excerpts only partially cover "
-        "the question, answer with what they do provide and briefly note what's "
-        "missing — don't refuse. Only if none of the excerpts are relevant at all, "
-        "say the knowledge base doesn't cover it.",
+        "[2], so the source can be attributed. Do NOT write your own Sources, "
+        "References, Citations, or Quotes section, and do not restate, renumber, or "
+        "comment on the excerpts — the system appends the exact source list and "
+        "quotes automatically. Just cite inline with [n]. If the excerpts only "
+        "partially cover the question, answer with what they do provide and briefly "
+        "note what's missing — don't refuse. Only if none of the excerpts are "
+        "relevant at all, say the knowledge base doesn't cover it.",
     ]
     for i, r in enumerate(results, 1):
         md = r.get("metadata", {})
@@ -414,6 +417,39 @@ def build_facts_extraction_prompt(existing_facts: str | None, latest_exchange: l
         "Format: one fact per line as 'key: value'.\n"
         "Track facts in these categories: goals, constraints, preferences, decisions, agreements.\n"
         "Output only the updated facts list, no preamble or explanation."
+    )
+
+    return "\n\n".join(parts)
+
+
+def build_dialogue_state_prompt(existing_state: str | None, latest_exchange: list[dict]) -> str:
+    """Build the prompt that maintains the structured "task state" of a dialogue.
+
+    Unlike the flat sticky-facts list, this tracks three fixed slots — the Goal of
+    the conversation, what the user has Given (specified), and the Constraints /
+    fixed terms — so the assistant does not lose its purpose over a long chat. The
+    Goal, once established, is carried forward and only refined, never dropped.
+    """
+    parts: list[str] = []
+
+    if existing_state:
+        parts.append(f"Current task state:\n{existing_state}")
+
+    parts.append("Latest exchange to incorporate:")
+    for msg in latest_exchange:
+        label = "User" if msg["role"] == "user" else "Assistant"
+        parts.append(f"{label}: {msg['content']}")
+
+    parts.append(
+        "Update the task state from the latest exchange. Output EXACTLY these three "
+        "lines and nothing else:\n"
+        "Goal: <the user's overall objective for this dialogue>\n"
+        "Given: <concrete details the user has specified so far, comma-separated>\n"
+        "Constraints: <fixed requirements, terms, or limits agreed so far, comma-separated>\n\n"
+        "Rules: keep the Goal stable once it is clear — only refine it, never drop or "
+        "replace it with a sub-question. Accumulate Given and Constraints; keep prior "
+        "entries that still hold, add new ones, drop only what was explicitly changed. "
+        "Use 'none yet' for an empty slot. No preamble, no extra lines."
     )
 
     return "\n\n".join(parts)

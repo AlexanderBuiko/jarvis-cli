@@ -26,6 +26,7 @@ from ..llm.gateway import LLMGateway
 from ..prompt_builder.builder import (
     build_summary_prompt,
     build_facts_extraction_prompt,
+    build_dialogue_state_prompt,
     build_topic_routing_prompt,
 )
 
@@ -86,6 +87,8 @@ class MemoryCoordinator:
             return self._windowed(history)
         if strategy == "sticky_facts":
             return self._facts_context(history, facts)
+        if strategy == "dialogue_state":
+            return self._state_context(history, facts)
         if strategy == "topics":
             return self._topic_context(history, active_topic, topic_summaries)
         return list(history)
@@ -130,6 +133,16 @@ class MemoryCoordinator:
             {"role": "assistant", "content": "Understood, I have noted these facts."},
         ]
         return facts_block + history
+
+    def _state_context(self, history, state) -> list[dict]:
+        """Prepend the structured task-state block so the goal is always in context."""
+        if not state:
+            return list(history)
+        state_block = [
+            {"role": "user", "content": f"[Task state — keep this goal in mind]\n{state}"},
+            {"role": "assistant", "content": "Understood — I'll keep the goal, given details, and constraints in mind."},
+        ]
+        return state_block + history
 
     def _topic_context(self, history, active_topic, topic_summaries) -> list[dict]:
         if not active_topic:
@@ -187,6 +200,9 @@ class MemoryCoordinator:
         if strategy == "sticky_facts":
             new_facts, record = self._update_facts(history, facts)
             return BackgroundResult(facts=new_facts, record=record)
+        if strategy == "dialogue_state":
+            new_state, record = self._update_state(history, facts)
+            return BackgroundResult(facts=new_state, record=record)
         if strategy == "topics" and active_topic:
             updated = self._update_topic_summary(history, active_topic, topic_summaries)
             if updated is None:
@@ -218,6 +234,13 @@ class MemoryCoordinator:
         prompt = build_facts_extraction_prompt(facts, latest_exchange)
         completion = self._gateway.complete([{"role": "user", "content": prompt}], self._bg_params())
         return completion.text.strip(), self._gateway.record(0, "facts_extraction", completion)
+
+    def _update_state(self, history, state) -> tuple[str, dict]:
+        """Revise the structured task state (Goal/Given/Constraints) after a turn."""
+        latest_exchange = history[-2:]
+        prompt = build_dialogue_state_prompt(state, latest_exchange)
+        completion = self._gateway.complete([{"role": "user", "content": prompt}], self._bg_params())
+        return completion.text.strip(), self._gateway.record(0, "dialogue_state_update", completion)
 
     def _update_topic_summary(self, history, topic, topic_summaries) -> tuple[str, dict] | None:
         latest_exchange = [m for m in history[-2:] if m.get("topic") == topic]

@@ -52,6 +52,7 @@ Commands
   thread rename <name>          Rename the active thread
   thread delete <name-or-id>    Permanently delete a thread
   thread summary                Show token, cost, compression state, facts, and topic summaries
+  thread state                  Show the dialogue task state (Goal / Given / Constraints)
 
   session chat                  Show the full conversation transcript
   session summary               Show aggregate session statistics with cost charts
@@ -153,11 +154,14 @@ Parameters
                              expert_panel      — three-expert panel with synthesis
                              prompt_generation — two-stage optimised prompt pipeline
 
-  context_strategy   none | compression | sliding_window | sticky_facts | topics
+  context_strategy   none | compression | sliding_window | sticky_facts | dialogue_state | topics
                              none           — full history sent verbatim (default)
                              compression    — rolling summary replaces older turns
                              sliding_window — only the most recent N turns are sent
                              sticky_facts   — structured facts block prepended to history
+                             dialogue_state — task memory: a Goal/Given/Constraints block kept and
+                                              updated each turn, so a long chat never loses its purpose
+                                              (pair with 'rag on' for a mini-chat with sources). See 'thread state'.
                              topics         — automatic topic routing; context scoped per topic
                              Can only be changed on an empty thread.
 
@@ -393,10 +397,13 @@ def handle_thread_summary(
             lines.append(f"  {line}" if line else "")
         lines += ["", sep]
 
-    # ── Section 5: Sticky facts ───────────────────────────────────────────────
+    # ── Section 5: Sticky facts / task state ──────────────────────────────────
     facts = agent.facts
     if facts is not None:
-        lines += [sep, "Sticky Facts", sep, ""]
+        # The dialogue_state strategy stores its structured Goal/Given/Constraints
+        # in the same field; label it accordingly.
+        heading = "Task State" if facts.lstrip().startswith("Goal:") else "Sticky Facts"
+        lines += [sep, heading, sep, ""]
         for line in facts.splitlines():
             lines.append(f"  {line}" if line else "")
         lines += ["", sep]
@@ -417,6 +424,19 @@ def handle_thread_summary(
         lines.append(sep)
 
     return "\n".join(lines)
+
+
+def handle_thread_state(agent: JarvisAgent) -> str:
+    """Show the dialogue 'task state' (Goal / Given / Constraints) for this thread."""
+    state = agent.facts
+    if not state or not state.strip():
+        return (
+            "No task state yet. Enable it and chat:\n"
+            "  config set context_strategy dialogue_state   (on an empty thread)\n"
+            "The goal, given details, and fixed constraints accrue each turn."
+        )
+    sep = "─" * 60
+    return f"Task State (dialogue memory)\n{sep}\n{state.strip()}\n{sep}"
 
 
 # ── Working memory (tasks) ──────────────────────────────────────────────────

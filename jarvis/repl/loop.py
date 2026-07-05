@@ -28,6 +28,7 @@ from .commands import (
     handle_thread_rename,
     handle_thread_delete,
     handle_thread_summary,
+    handle_thread_state,
     handle_session_chat,
     handle_session_summary,
     handle_session_api,
@@ -453,7 +454,9 @@ def _dispatch(
             model = config_manager.runtime.get("model") or DEFAULT_MODEL
             ctx = agent.get_context_window(model)
             return handle_thread_summary(agent, ctx)
-        return "Usage: thread | thread clear | thread load [<name-or-id>] | thread new [name] | thread rename <name> | thread delete <name-or-id> | thread summary"
+        if sub == "state":
+            return handle_thread_state(agent)
+        return "Usage: thread | thread clear | thread load [<name-or-id>] | thread new [name] | thread rename <name> | thread delete <name-or-id> | thread summary | thread state"
 
     if cmd == "task":
         if not args:

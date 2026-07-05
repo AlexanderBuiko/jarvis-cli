@@ -10,7 +10,13 @@ from jarvis.config.manager import ConfigManager
 from jarvis.indexing.embeddings import FakeEmbedder
 from jarvis.indexing.pipeline import IndexPipeline
 from jarvis.indexing.store import IndexStore
-from jarvis.rag.cite import build_citations, cited_indices, idk_message, pick_quote
+from jarvis.rag.cite import (
+    build_citations,
+    cited_indices,
+    idk_message,
+    pick_quote,
+    strip_trailing_citations,
+)
 from jarvis.rag import evaluate, ControlQuestion
 from tests.fake_engine import FakeEngine
 
@@ -27,6 +33,12 @@ class CiteUnitTest(unittest.TestCase):
         self.assertEqual(cited_indices("uses [1] and [3] here", 3), [1, 3])
         self.assertEqual(cited_indices("out of range [9]", 3), [])
         self.assertEqual(cited_indices("no markers", 3), [])
+
+    def test_cited_indices_parses_multi_number_brackets(self):
+        # The model often groups citations as "[3, 1]" or "[1,2,3]".
+        self.assertEqual(cited_indices("see [3, 1] and [2]", 5), [3, 1, 2])
+        self.assertEqual(cited_indices("all [1,2,3]", 5), [1, 2, 3])
+        self.assertEqual(cited_indices("mixed [2, 9]", 5), [2])  # 9 out of range dropped
 
     def test_pick_quote_is_verbatim_substring(self):
         quote = pick_quote(CHUNK_TEXT, "how to return a 404 error")
@@ -47,8 +59,29 @@ class CiteUnitTest(unittest.TestCase):
         self.assertIn("a:0", block)
         self.assertNotIn("other.md", block)  # [1] → only the first chunk
 
+    def test_quote_numbers_match_inline_citations(self):
+        results = [_res("a:0", filename="a.md"), _res("b:1", filename="b.md"),
+                   _res("c:2", filename="c.md")]
+        # Model cites [3] and [1] (not [1],[2]); quotes must keep those numbers.
+        block = build_citations(results, "import [3] then instance [1].", "q")
+        self.assertIn("[3] c.md", block)
+        self.assertIn("[1] a.md", block)
+        self.assertNotIn("[2]", block)  # excerpt 2 was never cited
+
     def test_empty_results_no_block(self):
         self.assertEqual(build_citations([], "x", "q"), "")
+
+    def test_strip_model_generated_sources(self):
+        answer = ("Use gt=0 [1] for the path param [2].\n\n"
+                  "Sources:\n  [1] path-params.md: says gt means greater than\n"
+                  "  [2] path-params.md: floats")
+        clean = strip_trailing_citations(answer)
+        self.assertEqual(clean, "Use gt=0 [1] for the path param [2].")
+        self.assertNotIn("Sources:", clean)
+
+    def test_strip_keeps_answer_without_citation_block(self):
+        answer = "Just a plain answer with an inline [1] marker."
+        self.assertEqual(strip_trailing_citations(answer), answer)
 
     def test_idk_message_declines_and_asks(self):
         msg = idk_message("q", 0.12, 0.4)
@@ -122,6 +155,15 @@ class AgentGroundedTest(unittest.TestCase):
         self.assertIn("Sources:", g["text"])
         self.assertIn("Quotes:", g["text"])
         self.assertIn("handling-errors.md", g["text"])
+
+    def test_model_self_sources_are_deduplicated(self):
+        # The model wrongly writes its own Sources block; only ours should remain.
+        model_answer = "Use gt=0 [1].\n\nSources:\n  [1] path-params.md: greater than"
+        agent = self._agent(FakeEngine(scripted=[model_answer]))
+        g = agent.grounded_answer("how do I require item_id > 0", "kb", 5)
+        self.assertEqual(g["text"].count("Sources:"), 1)
+        self.assertTrue(g["text"].startswith("Use gt=0 [1]."))
+        self.assertIn("Quotes:", g["text"])
 
     def test_strict_weak_context_says_idk(self):
         agent = self._agent(FakeEngine(scripted=["should not be used"]),

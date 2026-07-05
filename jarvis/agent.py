@@ -26,7 +26,7 @@ from .prompt_builder.builder import (
     build_prompt_generation_request,
 )
 from .indexing import IndexPipeline, IndexStore, make_embedder
-from .rag.cite import build_citations, idk_message
+from .rag.cite import build_citations, idk_message, strip_trailing_citations
 from .conversation.service import ConversationService
 from .session.store import SessionStore
 from .session.task_store import TaskStore
@@ -239,7 +239,8 @@ class JarvisAgent:
             if rag_results and params.get("rag_cite", True):
                 appendix = build_citations(rag_results, response_text, user_input)
                 if appendix:
-                    response_text = f"{response_text}\n\n{appendix}"
+                    body = strip_trailing_citations(response_text)
+                    response_text = f"{body}\n\n{appendix}"
 
         # Persist user/assistant turn; tag with topic when the topics strategy is active.
         user_msg: dict = {"role": "user", "content": user_input}
@@ -422,8 +423,11 @@ class JarvisAgent:
             if params.get("rag_strict"):
                 idk = idk_message(question, best, threshold)
                 return [], [], idk, f"RAG: weak context (best {best:.2f} < {threshold:.2f}) — I don't know (strict).", info
-            reason = "no matching chunks" if not enhanced else f"weak context (best {best:.2f} < {threshold:.2f})"
-            return [], [], None, f"RAG: {reason} in '{index_name}' — answered without grounding.", info
+            reason = "no matching chunks" if not enhanced else f"best match {best:.2f} < {threshold:.2f}"
+            return [], [], None, (
+                f"RAG: nothing relevant enough in '{index_name}' ({reason}) — "
+                "answered from general knowledge (no sources)."
+            ), info
 
         # Strong context → ground and cite.
         sources: list[str] = []
@@ -465,7 +469,7 @@ class JarvisAgent:
             if params.get("rag_cite", True):
                 appendix = build_citations(results, answer, question)
                 if appendix:
-                    answer = f"{answer}\n\n{appendix}"
+                    answer = f"{strip_trailing_citations(answer)}\n\n{appendix}"
             return {"text": answer, "grounded": True, "idk": False, "results": results, "notice": notice}
         return {"text": self.answer(question), "grounded": False, "idk": False, "results": [], "notice": notice}
 
