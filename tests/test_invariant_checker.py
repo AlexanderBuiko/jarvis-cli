@@ -53,6 +53,32 @@ class InvariantCheckerTest(unittest.TestCase):
         self.assertEqual(len(api_calls), 1)
         self.assertEqual(api_calls[0]["label"], "invariant_check")
 
+    def test_check_and_resolution_use_separate_gateways(self):
+        # The compliance CHECK runs on the (optionally local) check gateway; the
+        # RESOLUTION that rewrites the user-facing answer runs on the main gateway.
+        check_engine = FakeEngine(scripted=["- rule : violated"])
+        main_engine = FakeEngine(scripted=["resolved on main"])
+        checker = InvariantChecker(
+            LLMGateway(check_engine), resolve_gateway=LLMGateway(main_engine)
+        )
+        api_calls: list[dict] = []
+
+        text, notice, _ = checker.validate(
+            invariants="Always answer in English.",
+            messages=[{"role": "user", "content": "hi"}],
+            response_text="bad answer",
+            completion=_dummy_completion(),
+            params={"model": "test/model"},
+            api_calls=api_calls,
+        )
+
+        self.assertEqual(text, "resolved on main")
+        self.assertIsNotNone(notice)
+        self.assertEqual(len(check_engine.calls), 1)   # only the check
+        self.assertEqual(len(main_engine.calls), 1)    # only the resolution
+        self.assertEqual([c["label"] for c in api_calls],
+                         ["invariant_check", "invariant_resolution"])
+
     def test_violation_triggers_single_resolution(self):
         engine = FakeEngine(scripted=["- rule : violated", "resolved answer"])
         checker = InvariantChecker(LLMGateway(engine))

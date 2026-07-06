@@ -18,8 +18,13 @@ from ..prompt_builder.builder import (
 
 
 class InvariantChecker:
-    def __init__(self, gateway: LLMGateway) -> None:
+    def __init__(self, gateway: LLMGateway, resolve_gateway: LLMGateway | None = None) -> None:
+        # The compliance CHECK runs on ``gateway`` (may be a cheap/local utility
+        # engine). The RESOLUTION rewrites the user-facing answer, so it runs on
+        # ``resolve_gateway`` — the main engine — for answer quality. Defaults to
+        # the same gateway when not split.
         self._gateway = gateway
+        self._resolve_gateway = resolve_gateway or gateway
 
     def validate(
         self,
@@ -53,7 +58,7 @@ class InvariantChecker:
             {"role": "assistant", "content": response_text},
             {"role": "user", "content": resolution_prompt},
         ]
-        resolution = self._gateway.complete(
+        resolution = self._resolve_gateway.complete(
             resolution_messages, params,
             label="invariant_resolution", api_calls=api_calls,
         )

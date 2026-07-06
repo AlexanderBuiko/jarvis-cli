@@ -3,9 +3,7 @@ Entry point: python -m jarvis
 Also exposed as the 'jarvis' console script via setup.cfg.
 """
 
-import sys
 from .config.manager import ConfigManager
-from .openrouter.client import OpenRouterClient
 from .agent import JarvisAgent
 from .repl.loop import run_repl
 
@@ -40,12 +38,7 @@ def main() -> None:
     if applied:
         print(f"Config: loaded {', '.join(applied)}")
 
-    try:
-        config_manager = ConfigManager()
-        client = OpenRouterClient()
-    except EnvironmentError as exc:
-        print(f"\n{exc}\n", file=sys.stderr)
-        sys.exit(1)
+    config_manager = ConfigManager()
 
     tool_provider, mcp_status = _start_mcp()
     print(mcp_status)
@@ -54,7 +47,12 @@ def main() -> None:
         from .repl.tool_trace import install as install_tool_trace
         install_tool_trace()
 
-    agent = JarvisAgent(client, config_manager, tool_provider=tool_provider)
+    # The router builds engines lazily, per provider, so running fully local needs
+    # no OPENROUTER_API_KEY (and vice-versa). A missing key surfaces only if/when a
+    # turn actually routes to the cloud engine.
+    from .llm.router import EngineRouter
+    router = EngineRouter(config_manager, tool_provider=tool_provider)
+    agent = JarvisAgent(None, config_manager, tool_provider=tool_provider, router=router)
     try:
         run_repl(agent, config_manager)
     finally:

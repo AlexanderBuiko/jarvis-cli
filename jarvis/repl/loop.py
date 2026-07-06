@@ -9,6 +9,7 @@ All conversation and LLM logic lives in the agent; this module is pure UI.
 """
 
 import itertools
+import os
 import shutil
 import sys
 import threading
@@ -58,6 +59,25 @@ from ..openrouter.client import DEFAULT_MODEL
 from ..pipeline.base import GATE_APPROVAL, GATE_QUESTION
 
 
+def _active_provider_model(config_manager: ConfigManager) -> tuple[str, str]:
+    """(provider, effective model) for the current toggle — for status/context display.
+
+    On the local provider a cloud model id in ``model`` is meaningless, so the local
+    engine's own default is shown instead (matching what it will actually run).
+    """
+    from ..llm.router import current_provider
+    provider = current_provider(config_manager)
+    configured = config_manager.runtime.get("model")
+    if provider == "ollama":
+        from ..ollama.client import DEFAULT_MODEL as OLLAMA_DEFAULT
+        model = configured if (configured and "/" not in configured) else (
+            os.environ.get("JARVIS_OLLAMA_MODEL") or OLLAMA_DEFAULT
+        )
+    else:
+        model = configured or DEFAULT_MODEL
+    return provider, model
+
+
 def run_repl(agent: JarvisAgent, config_manager: ConfigManager) -> None:
     print(_banner())
 
@@ -78,12 +98,13 @@ def run_repl(agent: JarvisAgent, config_manager: ConfigManager) -> None:
         if task:
             return f"task: {task['name']}  ·  stage: {task['stage']}"
         tokens = agent.last_context_tokens
-        model = config_manager.runtime.get("model") or DEFAULT_MODEL
+        provider, model = _active_provider_model(config_manager)
         ctx = agent.get_context_window(model)
+        head = f"{provider}:{model}"
         if ctx:
             pct = round(tokens * 100 / ctx)
-            return f"chat: {tokens:,}/{ctx:,} ({pct}%) tokens"
-        return f"chat: {tokens:,} tokens"
+            return f"{head}  ·  chat: {tokens:,}/{ctx:,} ({pct}%) tokens"
+        return f"{head}  ·  chat: {tokens:,} tokens"
 
     def _progress_fn() -> str:
         """Live plan-progress panel shown above the input during execution/validation."""
@@ -451,7 +472,7 @@ def _dispatch(
         if sub == "delete":
             return handle_thread_delete(args[1:], agent)
         if sub == "summary":
-            model = config_manager.runtime.get("model") or DEFAULT_MODEL
+            _, model = _active_provider_model(config_manager)
             ctx = agent.get_context_window(model)
             return handle_thread_summary(agent, ctx)
         if sub == "state":

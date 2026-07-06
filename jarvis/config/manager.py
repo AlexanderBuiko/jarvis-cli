@@ -18,6 +18,7 @@ def _parse_bool(raw: str) -> bool:
 
 
 _PARAM_PARSERS: dict[str, Any] = {
+    "provider":          str,
     "model":             str,
     "temperature":       float,
     "top_p":             float,
@@ -42,6 +43,13 @@ _PARAM_PARSERS: dict[str, Any] = {
 }
 
 _PARAM_VALIDATORS: dict[str, tuple] = {
+    # Which engine serves the main turn. Read live per-turn by the RoutingEngine, so
+    # this is a runtime toggle: `config set provider ollama` switches cloud→local
+    # mid-session (and back). Requires the corresponding engine to be reachable.
+    "provider": (
+        lambda v: v in ("openrouter", "ollama"),
+        "provider must be one of: openrouter, ollama",
+    ),
     "temperature": (
         lambda v: 0.0 <= v <= 2.0,
         "temperature must be between 0.0 and 2.0",
