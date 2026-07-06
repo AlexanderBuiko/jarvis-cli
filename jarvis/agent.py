@@ -68,30 +68,48 @@ class JarvisAgent:
 
     def __init__(
         self,
-        client: LLMEngine,
+        client: LLMEngine | None,
         config_manager: ConfigManager,
         tool_provider=None,
+        router=None,
     ) -> None:
-        # Every model call in the app flows through the single gateway (accounting,
-        # and later retries/caching live there). Nothing below touches the engine
-        # directly any more. The optional tool_provider (an MCPToolProvider) makes
-        # MCP tools available on tool-enabled calls (chat answers + stage turns).
+        # Every model call in the app flows through a gateway (accounting, and later
+        # retries/caching live there). Nothing below touches an engine directly.
+        #
+        # Two modes:
+        #  • router given (real app) — the *main* gateway wraps a live-routing engine,
+        #    so `config set provider ollama` toggles the main turn cloud↔local without
+        #    a restart. Background roles (invariants/memory/personalisation) and the
+        #    pipeline sub-agents each resolve their own gateway, which may be pinned to
+        #    a fixed provider (JARVIS_UTILITY_PROVIDER / JARVIS_SUBAGENT_PROVIDER) or,
+        #    when unset, simply follow the main toggle.
+        #  • no router (tests / single-engine) — one concrete `client` serves every
+        #    role, exactly as before.
         self._tool_provider = tool_provider
-        self._gateway = LLMGateway(client, tool_provider=tool_provider)
+        if router is not None:
+            self._gateway = router.main_gateway
+            utility_gw = router.role_gateway("JARVIS_UTILITY_PROVIDER")
+            subagent_gw = router.role_gateway("JARVIS_SUBAGENT_PROVIDER")
+        else:
+            self._gateway = LLMGateway(client, tool_provider=tool_provider)
+            utility_gw = subagent_gw = self._gateway
         self._config = config_manager
-        self._memory = MemoryCoordinator(self._gateway, config_manager)
-        self._invariant_checker = InvariantChecker(self._gateway)
+        self._memory = MemoryCoordinator(utility_gw, config_manager)
+        # Invariant CHECK runs on the (optionally local) utility gateway — a cheap,
+        # private "requirements linter". The RESOLUTION step rewrites the user-facing
+        # answer, so it stays on the main gateway for answer quality.
+        self._invariant_checker = InvariantChecker(utility_gw, resolve_gateway=self._gateway)
         # The active chat thread and its lifecycle live in ConversationService;
         # this agent reads/writes self._conversation.state.
         self._conversation = ConversationService()
         self._tasks = TaskStore()
         self._profile = ProfileStore()
         self._invariants = InvariantStore()
-        self._personalization = PersonalizationService(self._gateway, config_manager, self._profile)
+        self._personalization = PersonalizationService(utility_gw, config_manager, self._profile)
         # The orchestrator drives the task FSM through a StageRunner; it no longer
         # depends on this agent (the old run_turn callback is gone).
         self._stage_runner = LLMStageRunner(
-            self._gateway, config_manager, self._memory,
+            subagent_gw, config_manager, self._memory,
             self._profile, self._invariants, self._invariant_checker, self._tasks,
         )
         # Stage runners are layered onto the base seam, each overriding one stage and
@@ -100,10 +118,10 @@ class JarvisAgent:
         #   • ParallelExecutionRunner — opt-in parallel `execution` (execution_agents>1)
         # Both default to the original single-turn behaviour and token cost.
         self._stage_runner = SwarmStageRunner(
-            self._gateway, config_manager, self._stage_runner, self._tasks,
+            subagent_gw, config_manager, self._stage_runner, self._tasks,
         )
         self._stage_runner = ParallelExecutionRunner(
-            self._gateway, config_manager, self._stage_runner, self._tasks,
+            subagent_gw, config_manager, self._stage_runner, self._tasks,
         )
         self._orchestrator = Orchestrator(STAGE_AGENTS, self._tasks, self._stage_runner)
 
