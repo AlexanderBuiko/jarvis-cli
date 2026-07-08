@@ -160,6 +160,15 @@ class ConfigManager:
         """Clear all user-set parameters."""
         self._values.clear()
 
+    def snapshot(self) -> dict[str, Any]:
+        """A copy of the current values, for a later exact restore()."""
+        return dict(self._values)
+
+    def restore(self, snapshot: dict[str, Any]) -> None:
+        """Replace all values with a prior snapshot() (used to save/restore around
+        temporary overrides, e.g. the local↔cloud comparison's provider toggle)."""
+        self._values = dict(snapshot)
+
     def show(self) -> str:
         if not self._values:
             return "No parameters set. Using API defaults."
