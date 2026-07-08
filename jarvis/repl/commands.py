@@ -992,8 +992,10 @@ _RAG_USAGE = (
     "Usage:\n"
     "  rag ask <question words…> [name=..] [k=5]      Answer once without vs with RAG\n"
     "  rag eval [name=..] [k=5] [answers=on|off]      Run the control questions + score\n"
-    "Note: both call the chat model (rag ask = 2 calls; rag eval = ~2×questions).\n"
-    "      'answers=off' makes eval retrieval-only (cheap — no chat calls)."
+    "  rag compare [name=..] [k=..] [repeats=3] [n=..]  Local vs cloud: quality/speed/stability\n"
+    "              [local=qwen2.5:7b] [cloud=google/gemini-2.5-flash]\n"
+    "Note: 'rag ask' = 2 calls; 'rag eval' = ~2×questions; 'rag compare' runs both\n"
+    "      providers × repeats (retrieval stays local; needs OPENROUTER_API_KEY for cloud)."
 )
 
 
@@ -1006,6 +1008,8 @@ def handle_rag(args: list[str], agent: JarvisAgent, config_manager: ConfigManage
             return _rag_ask(rest, agent, config_manager)
         if sub == "eval":
             return _rag_eval(rest, agent, config_manager)
+        if sub == "compare":
+            return _rag_compare(rest, agent, config_manager)
         return _RAG_USAGE
     except Exception as exc:  # boundary: report, don't crash the REPL
         return f"RAG error: {exc}"
@@ -1085,6 +1089,56 @@ def _rag_eval(args: list[str], agent: JarvisAgent, config_manager: ConfigManager
     questions = load_questions(opts.get("questions") or DEFAULT_QUESTIONS_PATH)
     report = evaluate(agent, questions, index, k=k, generate_answers=generate)
     return format_report(report)
+
+
+def _rag_compare(args: list[str], agent: JarvisAgent, config_manager: ConfigManager) -> str:
+    """Run the control questions through the local and the cloud chat model and
+    rate quality / speed / stability. Retrieval stays local for both sides."""
+    import os
+    import sys
+
+    from ..llm.gateway import LLMGateway
+    from ..llm.router import make_engine
+    from ..openrouter.client import DEFAULT_MODEL as CLOUD_DEFAULT
+    from ..rag import DEFAULT_QUESTIONS_PATH, load_questions
+    from ..rag.compare import compare_providers, format_compare_report
+
+    _, opts = _split_index_args(args)
+    index = _resolve_rag_index(opts, config_manager)
+    if not index:
+        return "No index to compare against. Build one:  index build <path>"
+    k = _resolve_rag_k(opts, config_manager)
+    repeats = max(1, int(opts.get("repeats", 3)))
+    local_model = opts.get("local") or os.environ.get("JARVIS_OLLAMA_MODEL") or "qwen2.5:7b"
+    cloud_model = opts.get("cloud") or CLOUD_DEFAULT
+
+    # Fixed judge = the cloud model, scoring both sides equally. Requires the key;
+    # this is also the cloud generation side, so a missing key stops the whole run.
+    try:
+        judge_gateway = LLMGateway(make_engine("openrouter"))
+    except EnvironmentError:
+        return ("'rag compare' needs OPENROUTER_API_KEY for the cloud side and the "
+                "shared judge. Set it, or use 'rag eval' for a local-only quality run.")
+
+    questions = load_questions(opts.get("questions") or DEFAULT_QUESTIONS_PATH)
+    if opts.get("n"):
+        questions = questions[: int(opts["n"])]
+
+    total = len(questions) * repeats * 2
+    print(f"Running {total} answers across 2 providers "
+          f"({len(questions)} questions × {repeats} repeats)…", file=sys.stderr)
+
+    def _progress(msg: str) -> None:
+        print(f"\r  … {msg}   ", end="", file=sys.stderr, flush=True)
+
+    report = compare_providers(
+        agent, config_manager, questions, index,
+        providers=[("ollama", local_model), ("openrouter", cloud_model)],
+        judge_gateway=judge_gateway, judge_model=cloud_model,
+        repeats=repeats, k=k, on_progress=_progress,
+    )
+    print("\r" + " " * 60 + "\r", end="", file=sys.stderr, flush=True)
+    return format_compare_report(report)
 
 
 def handle_session_chat(session_store: SessionStore) -> str:
