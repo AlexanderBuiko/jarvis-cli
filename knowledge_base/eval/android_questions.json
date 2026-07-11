@@ -1,0 +1,47 @@
+[
+  {
+    "question": "What is structured concurrency in Kotlin coroutines and why does it matter?",
+    "expectation": ["structured concurrency", "scope", "cancellation", "child"],
+    "expected_sources": ["kotlin-coroutines.md"]
+  },
+  {
+    "question": "What is the difference between launch and async in coroutines?",
+    "expectation": ["launch", "async", "Deferred", "await"],
+    "expected_sources": ["kotlin-coroutines.md"]
+  },
+  {
+    "question": "How does coroutine cancellation work and what makes code cooperative to it?",
+    "expectation": ["cancellation", "cooperative", "CancellationException", "isActive"],
+    "expected_sources": ["kotlin-coroutines.md"]
+  },
+  {
+    "question": "What is a CoroutineDispatcher and what are the common dispatchers?",
+    "expectation": ["dispatcher", "Default", "IO", "thread"],
+    "expected_sources": ["kotlin-coroutines.md"]
+  },
+  {
+    "question": "How does recomposition work in Jetpack Compose?",
+    "expectation": ["recomposition", "state", "recompose", "composable"],
+    "expected_sources": ["compose-internals.md"]
+  },
+  {
+    "question": "What is the role of the Composer and the slot table in Compose?",
+    "expectation": ["Composer", "slot table", "state", "remember"],
+    "expected_sources": ["compose-internals.md"]
+  },
+  {
+    "question": "Why should you prefer immutability and val over var in Kotlin?",
+    "expectation": ["immutability", "val", "mutable", "state"],
+    "expected_sources": ["effective-kotlin.md"]
+  },
+  {
+    "question": "Why prefer standard library functions over custom implementations in Kotlin?",
+    "expectation": ["standard library", "readable", "reuse", "correct"],
+    "expected_sources": ["effective-kotlin.md"]
+  },
+  {
+    "question": "What does it mean to minimize the scope and mutability of a variable in Kotlin?",
+    "expectation": ["scope", "mutability", "narrow", "readonly"],
+    "expected_sources": ["effective-kotlin.md"]
+  }
+]

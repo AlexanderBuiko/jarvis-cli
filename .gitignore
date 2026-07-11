@@ -16,6 +16,10 @@ env/
 # Jarvis user config
 .jarvis/
 
+# Personal / copyrighted knowledge-base sources — never commit (source books and
+# their extracted text). The index is rebuilt locally from your own copies.
+knowledge_base/android/
+
 # Local secrets / config (never commit). .env.example is the committed template.
 .env
 

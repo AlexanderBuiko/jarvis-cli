@@ -8,6 +8,11 @@ to its own defaults for missing fields.
 
 from typing import Any
 
+from ..prompt_builder.builder import TASK_TEMPLATES
+
+# Names of the registered task-prompt templates, for validating `task_template`.
+_TASK_TEMPLATE_NAMES: tuple[str, ...] = tuple(TASK_TEMPLATES)
+
 
 def _parse_bool(raw: str) -> bool:
     if raw.lower() in ("true", "yes", "1", "on"):
@@ -20,6 +25,7 @@ def _parse_bool(raw: str) -> bool:
 _PARAM_PARSERS: dict[str, Any] = {
     "provider":          str,
     "model":             str,
+    "task_template":     str,
     "temperature":       float,
     "top_p":             float,
     "top_k":             int,
@@ -49,6 +55,11 @@ _PARAM_VALIDATORS: dict[str, tuple] = {
     "provider": (
         lambda v: v in ("openrouter", "ollama"),
         "provider must be one of: openrouter, ollama",
+    ),
+    # Task-specific system-prompt template (optimisation lever). 'none' disables it.
+    "task_template": (
+        lambda v: v in ("none", *_TASK_TEMPLATE_NAMES),
+        "task_template must be 'none' or one of: " + ", ".join(_TASK_TEMPLATE_NAMES),
     ),
     "temperature": (
         lambda v: 0.0 <= v <= 2.0,

@@ -44,12 +44,36 @@ class AnswerSample:
 
 
 @dataclass
+class Profile:
+    """A named configuration to benchmark: an engine + optional config overrides.
+
+    ``params`` are config keys applied for this profile's run (string values, as
+    ``config.set`` takes them) — e.g. ``{"temperature": "0.2", "max_tokens": "512",
+    "task_template": "android_interview"}``. This is what makes before/after
+    optimisation a first-class comparison, not just local vs cloud.
+    """
+    label: str
+    provider: str
+    model: str
+    params: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
 class ProviderReport:
     provider: str
     model: str
     samples: list[AnswerSample]
     # grouped by question, in ask order, for intra-question consistency
     by_question: list[list[AnswerSample]] = field(default_factory=list)
+    label: str | None = None
+    # Resource consumption (local models only; None for cloud / when not probed).
+    tokens_per_sec: float | None = None
+    vram_mb: int | None = None
+    ctx: int | None = None
+
+    @property
+    def column(self) -> str:
+        return self.label or f"{self.provider}/{self.model}"
 
     # ── sample partitions ──
     @property
@@ -143,6 +167,89 @@ class CompareReport:
     providers: list[ProviderReport]
 
 
+def compare_configs(
+    agent: Any,
+    config: Any,
+    questions: list[ControlQuestion],
+    index_name: str,
+    *,
+    profiles: list[Profile],
+    judge_gateway: Any,
+    judge_model: str | None,
+    repeats: int = 3,
+    k: int = 4,
+    probe_resources: bool = False,
+    ollama_url: str | None = None,
+    on_progress: Callable[[str], None] | None = None,
+) -> CompareReport:
+    """Run ``questions`` through each named ``profile`` and score all three axes.
+
+    Each profile applies its own config overrides (params, task_template) on top of
+    a fair, shared retrieval base (same local index, no query rewrite), so this
+    powers both local-vs-cloud AND before-vs-after-optimisation comparisons. The
+    agent's config is snapshotted and restored, so the caller's settings survive.
+
+    ``probe_resources`` additionally measures tokens/sec and VRAM for local profiles
+    (a small extra generation + an ``/api/ps`` read); off by default so hermetic
+    callers make no network calls.
+    """
+    saved = config.snapshot()
+    reports: list[ProviderReport] = []
+    hit_rate = 0.0
+    try:
+        # Fair, identical retrieval for every profile: local index, no LLM rewrite.
+        config.set("rag_rewrite", "off")
+        config.set("rag_cite", "on")
+        config.set("rag_index", index_name)
+        base = config.snapshot()
+
+        # Retrieval, once (independent of the chat provider).
+        hits = 0
+        for q in questions:
+            raw, _enhanced, error = agent.rag_retrieve(q.question, index_name, k)
+            if error is None and _retrieval_hit(q, raw):
+                hits += 1
+        hit_rate = hits / len(questions) if questions else 0.0
+
+        for prof in profiles:
+            config.restore(base)          # reset overrides between profiles
+            config.set("provider", prof.provider)
+            config.set("model", prof.model)
+            for key, value in prof.params.items():
+                config.set(key, value)
+
+            by_question: list[list[AnswerSample]] = []
+            flat: list[AnswerSample] = []
+            for qi, q in enumerate(questions):
+                group: list[AnswerSample] = []
+                for r in range(repeats):
+                    if on_progress:
+                        on_progress(f"{prof.label}: q{qi+1}/{len(questions)} "
+                                    f"repeat {r+1}/{repeats}")
+                    group.append(_run_one(agent, q, index_name, k, judge_gateway, judge_model))
+                by_question.append(group)
+                flat.extend(group)
+
+            report = ProviderReport(prof.provider, prof.model, flat, by_question, label=prof.label)
+            if probe_resources and prof.provider == "ollama":
+                report.tokens_per_sec, report.vram_mb, report.ctx = _probe_local(
+                    prof.model, ollama_url
+                )
+            reports.append(report)
+    finally:
+        config.restore(saved)
+
+    return CompareReport(
+        index_name=index_name,
+        k=k,
+        repeats=repeats,
+        n_questions=len(questions),
+        judge_desc=f"{judge_model or '(engine default)'}",
+        retrieval_hit_rate=hit_rate,
+        providers=reports,
+    )
+
+
 def compare_providers(
     agent: Any,
     config: Any,
@@ -156,57 +263,53 @@ def compare_providers(
     k: int = 4,
     on_progress: Callable[[str], None] | None = None,
 ) -> CompareReport:
-    """Run ``questions`` through each (provider, model) in ``providers`` and score.
-
-    ``providers`` is a list of ``(provider, model)`` pairs, e.g.
-    ``[("ollama", "qwen2.5:7b"), ("openrouter", "google/gemini-2.5-flash")]``.
-    Retrieval is measured once (shared, local). The agent's config is snapshotted
-    and restored, so the caller's settings are untouched afterwards.
-    """
-    saved = config.snapshot()
-    reports: list[ProviderReport] = []
-    hit_rate = 0.0
-    try:
-        # Fair, identical retrieval for both sides: local index, no LLM query rewrite.
-        config.set("rag_rewrite", "off")
-        config.set("rag_cite", "on")
-        config.set("rag_index", index_name)
-
-        # Retrieval, once (independent of the chat provider).
-        hits = 0
-        for q in questions:
-            raw, _enhanced, error = agent.rag_retrieve(q.question, index_name, k)
-            if error is None and _retrieval_hit(q, raw):
-                hits += 1
-        hit_rate = hits / len(questions) if questions else 0.0
-
-        for provider, model in providers:
-            config.set("provider", provider)
-            config.set("model", model)
-            by_question: list[list[AnswerSample]] = []
-            flat: list[AnswerSample] = []
-            for q in questions:
-                group: list[AnswerSample] = []
-                for r in range(repeats):
-                    if on_progress:
-                        on_progress(f"{provider}: q{questions.index(q)+1}/{len(questions)} "
-                                    f"repeat {r+1}/{repeats}")
-                    group.append(_run_one(agent, q, index_name, k, judge_gateway, judge_model))
-                by_question.append(group)
-                flat.extend(group)
-            reports.append(ProviderReport(provider, model, flat, by_question))
-    finally:
-        config.restore(saved)
-
-    return CompareReport(
-        index_name=index_name,
-        k=k,
-        repeats=repeats,
-        n_questions=len(questions),
-        judge_desc=f"{judge_model or '(engine default)'}",
-        retrieval_hit_rate=hit_rate,
-        providers=reports,
+    """Backward-compatible wrapper: compare a list of ``(provider, model)`` pairs
+    with no per-profile overrides. See ``compare_configs`` for the general form."""
+    profiles = [Profile(f"{p}/{m}", p, m) for p, m in providers]
+    return compare_configs(
+        agent, config, questions, index_name,
+        profiles=profiles, judge_gateway=judge_gateway, judge_model=judge_model,
+        repeats=repeats, k=k, on_progress=on_progress,
     )
+
+
+def _probe_local(model: str, url: str | None) -> tuple[float | None, int | None, int | None]:
+    """Measure (tokens/sec, VRAM MB, context window) for a local Ollama model.
+
+    tokens/sec comes from a short native generation (``eval_count`` /
+    ``eval_duration``); VRAM and context from ``/api/ps``. Best-effort — any failure
+    yields Nones so a probe never breaks the benchmark.
+    """
+    import requests
+    base = (url or "http://localhost:11434").rstrip("/")
+    tps = vram_mb = ctx = None
+    try:
+        r = requests.post(f"{base}/api/generate", json={
+            "model": model,
+            "prompt": "Explain structured concurrency in two sentences.",
+            "stream": False,
+        }, timeout=120)
+        if r.status_code == 200:
+            d = r.json()
+            n, dur = d.get("eval_count"), d.get("eval_duration")  # count, nanoseconds
+            if n and dur:
+                tps = n / (dur / 1e9)
+    except requests.RequestException:
+        pass
+    try:
+        r = requests.get(f"{base}/api/ps", timeout=10)
+        if r.status_code == 200:
+            for m in r.json().get("models", []):
+                if m.get("name", "").split(":")[0] == model.split(":")[0]:
+                    size = m.get("size_vram") or m.get("size")
+                    if size:
+                        vram_mb = round(size / (1024 * 1024))
+                    ctx = (m.get("context_length")
+                           or (m.get("details") or {}).get("context_length"))
+                    break
+    except requests.RequestException:
+        pass
+    return tps, vram_mb, ctx
 
 
 def _run_one(
@@ -275,9 +378,9 @@ def format_compare_report(report: CompareReport) -> str:
         f"Meaning-match judge (fixed for both): {report.judge_desc}",
         sep,
     ]
-    # Column per provider.
-    cols = [f"{p.provider}/{p.model}" for p in report.providers]
-    width = max([len(c) for c in cols] + [22])
+    # Column per profile.
+    cols = [p.column for p in report.providers]
+    width = max([len(c) for c in cols] + [16])
 
     def row(name: str, vals: list[str]) -> str:
         return f"  {name:<26}" + "".join(f"{v:>{width + 2}}" for v in vals)
@@ -298,6 +401,15 @@ def format_compare_report(report: CompareReport) -> str:
     lines.append(row("  coverage spread", [f"{p.coverage_spread:.2f}" for p in report.providers]))
     lines.append(row("  judge-verdict flips", [pct(p.verdict_flip_rate) for p in report.providers]))
     lines.append(row("  error rate", [pct(p.error_rate) for p in report.providers]))
+
+    # RESOURCES — only when at least one profile was probed (local models).
+    if any(p.tokens_per_sec is not None or p.vram_mb is not None for p in report.providers):
+        def res(v, suffix=""):
+            return "—" if v is None else f"{round(v)}{suffix}"
+        lines.append("  RESOURCES (local)")
+        lines.append(row("  throughput tok/s", [res(p.tokens_per_sec) for p in report.providers]))
+        lines.append(row("  VRAM footprint", [res(p.vram_mb, "MB") for p in report.providers]))
+        lines.append(row("  context window", [res(p.ctx) for p in report.providers]))
     lines.append(sep)
     lines.append("Lower is better: latency, latency spread (CV), coverage spread, "
                  "verdict flips, error rate. Higher is better: everything under QUALITY.")
