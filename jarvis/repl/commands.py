@@ -994,8 +994,10 @@ _RAG_USAGE = (
     "  rag eval [name=..] [k=5] [answers=on|off]      Run the control questions + score\n"
     "  rag compare [name=..] [k=..] [repeats=3] [n=..]  Local vs cloud: quality/speed/stability\n"
     "              [local=qwen2.5:7b] [cloud=google/gemini-2.5-flash]\n"
-    "Note: 'rag ask' = 2 calls; 'rag eval' = ~2×questions; 'rag compare' runs both\n"
-    "      providers × repeats (retrieval stays local; needs OPENROUTER_API_KEY for cloud)."
+    "  rag bench [name=..] [k=..] [repeats=2] [n=..]    Optimization matrix: base vs optimized,\n"
+    "              [opt=qwen-android] [q8=..] [quant=on|off]   local vs cloud + resources\n"
+    "Note: 'rag ask' = 2 calls; 'rag eval' = ~2×questions; 'rag compare'/'rag bench' run\n"
+    "      each profile × repeats (retrieval stays local; needs OPENROUTER_API_KEY for cloud)."
 )
 
 
@@ -1010,6 +1012,8 @@ def handle_rag(args: list[str], agent: JarvisAgent, config_manager: ConfigManage
             return _rag_eval(rest, agent, config_manager)
         if sub == "compare":
             return _rag_compare(rest, agent, config_manager)
+        if sub == "bench":
+            return _rag_bench(rest, agent, config_manager)
         return _RAG_USAGE
     except Exception as exc:  # boundary: report, don't crash the REPL
         return f"RAG error: {exc}"
@@ -1029,6 +1033,36 @@ def _resolve_rag_k(opts: dict, config_manager: ConfigManager) -> int:
     if opts.get("k"):
         return int(opts["k"])
     return int(config_manager.runtime.get("rag_k") or 5)
+
+
+def _resolve_questions_path(opts: dict, index: str):
+    """Resolve the control-question set for an eval/compare/bench run.
+
+    Resolution: explicit ``questions=`` → a per-index set at
+    ``knowledge_base/eval/<index>_questions.json`` if it exists → the built-in
+    default. The per-index rule stops the classic footgun of scoring one index
+    against another index's questions (e.g. Android answers vs FastAPI questions).
+    """
+    from ..rag import DEFAULT_QUESTIONS_PATH
+
+    if opts.get("questions"):
+        return opts["questions"]
+    per_index = DEFAULT_QUESTIONS_PATH.parent / f"{index}_questions.json"
+    return per_index if per_index.exists() else DEFAULT_QUESTIONS_PATH
+
+
+def _mismatch_hint(hit_rate: float, opts: dict, index: str) -> str:
+    """A loud warning when retrieval never hit — almost always a question/index
+    mismatch (scoring one index against another's control questions)."""
+    if hit_rate > 0 or opts.get("questions"):
+        return ""
+    return (
+        f"\n\n⚠  Retrieval hit-rate is 0% — the control questions likely don't match "
+        f"index '{index}'. Add a matching set at "
+        f"knowledge_base/eval/{index}_questions.json, or pass "
+        f"questions=<path>. Quality/citation scores above are meaningless until this "
+        f"is fixed (resource/speed numbers are still valid)."
+    )
 
 
 def _chunk_line(r: dict) -> str:
@@ -1078,7 +1112,7 @@ def _rag_ask(args: list[str], agent: JarvisAgent, config_manager: ConfigManager)
 
 
 def _rag_eval(args: list[str], agent: JarvisAgent, config_manager: ConfigManager) -> str:
-    from ..rag import load_questions, evaluate, format_report, DEFAULT_QUESTIONS_PATH
+    from ..rag import evaluate, format_report, load_questions
 
     positional, opts = _split_index_args(args)
     index = _resolve_rag_index(opts, config_manager)
@@ -1086,9 +1120,10 @@ def _rag_eval(args: list[str], agent: JarvisAgent, config_manager: ConfigManager
         return "No index to evaluate against. Build one:  index build <path>"
     k = _resolve_rag_k(opts, config_manager)
     generate = opts.get("answers", "on").lower() not in ("off", "false", "no", "0")
-    questions = load_questions(opts.get("questions") or DEFAULT_QUESTIONS_PATH)
+    questions = load_questions(_resolve_questions_path(opts, index))
     report = evaluate(agent, questions, index, k=k, generate_answers=generate)
-    return format_report(report)
+    out = format_report(report)
+    return out + _mismatch_hint(report.retrieval_hit_rate, opts, index)
 
 
 def _rag_compare(args: list[str], agent: JarvisAgent, config_manager: ConfigManager) -> str:
@@ -1100,7 +1135,7 @@ def _rag_compare(args: list[str], agent: JarvisAgent, config_manager: ConfigMana
     from ..llm.gateway import LLMGateway
     from ..llm.router import make_engine
     from ..openrouter.client import DEFAULT_MODEL as CLOUD_DEFAULT
-    from ..rag import DEFAULT_QUESTIONS_PATH, load_questions
+    from ..rag import load_questions
     from ..rag.compare import compare_providers, format_compare_report
 
     _, opts = _split_index_args(args)
@@ -1120,7 +1155,7 @@ def _rag_compare(args: list[str], agent: JarvisAgent, config_manager: ConfigMana
         return ("'rag compare' needs OPENROUTER_API_KEY for the cloud side and the "
                 "shared judge. Set it, or use 'rag eval' for a local-only quality run.")
 
-    questions = load_questions(opts.get("questions") or DEFAULT_QUESTIONS_PATH)
+    questions = load_questions(_resolve_questions_path(opts, index))
     if opts.get("n"):
         questions = questions[: int(opts["n"])]
 
@@ -1138,7 +1173,72 @@ def _rag_compare(args: list[str], agent: JarvisAgent, config_manager: ConfigMana
         repeats=repeats, k=k, on_progress=_progress,
     )
     print("\r" + " " * 60 + "\r", end="", file=sys.stderr, flush=True)
-    return format_compare_report(report)
+    return format_compare_report(report) + _mismatch_hint(report.retrieval_hit_rate, opts, index)
+
+
+def _rag_bench(args: list[str], agent: JarvisAgent, config_manager: ConfigManager) -> str:
+    """Optimization benchmark: base vs optimized local model, plus cloud, scored on
+    quality / speed / stability and (for local) throughput + VRAM footprint."""
+    import os
+    import sys
+
+    from ..llm.gateway import LLMGateway
+    from ..llm.router import make_engine
+    from ..openrouter.client import DEFAULT_MODEL as CLOUD_DEFAULT
+    from ..rag import load_questions
+    from ..rag.compare import Profile, compare_configs, format_compare_report
+
+    _, opts = _split_index_args(args)
+    index = _resolve_rag_index(opts, config_manager)
+    if not index:
+        return "No index to benchmark against. Build one:  index build <path>"
+    k = _resolve_rag_k(opts, config_manager)
+    repeats = max(1, int(opts.get("repeats", 2)))
+    template = opts.get("template", "android_interview")
+    cloud_model = opts.get("cloud") or CLOUD_DEFAULT
+
+    try:
+        judge_gateway = LLMGateway(make_engine("openrouter"))
+    except EnvironmentError:
+        return ("'rag bench' needs OPENROUTER_API_KEY for the cloud profiles and the "
+                "shared judge. Set it, or use 'rag eval' for a local-only run.")
+
+    # The optimization matrix. local-base → local-opt shows the before/after; the q8
+    # profile is the quantization axis; the cloud pair shows local↔cloud with and
+    # without the same prompt optimization.
+    profiles = [
+        Profile("local-base", "ollama", opts.get("base", "qwen2.5:7b"), {}),
+        Profile("local-opt", "ollama", opts.get("opt", "qwen-android"),
+                {"task_template": template}),
+    ]
+    if opts.get("quant", "on").lower() not in ("off", "false", "no", "0"):
+        profiles.append(Profile("local-q8", "ollama",
+                                opts.get("q8", "qwen2.5:7b-instruct-q8_0"),
+                                {"task_template": template}))
+    profiles += [
+        Profile("cloud-base", "openrouter", cloud_model, {}),
+        Profile("cloud-opt", "openrouter", cloud_model, {"task_template": template}),
+    ]
+
+    questions = load_questions(_resolve_questions_path(opts, index))
+    if opts.get("n"):
+        questions = questions[: int(opts["n"])]
+
+    total = len(questions) * repeats * len(profiles)
+    print(f"Running {total} answers across {len(profiles)} profiles "
+          f"({len(questions)} questions × {repeats} repeats)…", file=sys.stderr)
+
+    def _progress(msg: str) -> None:
+        print(f"\r  … {msg}   ", end="", file=sys.stderr, flush=True)
+
+    report = compare_configs(
+        agent, config_manager, questions, index,
+        profiles=profiles, judge_gateway=judge_gateway, judge_model=cloud_model,
+        repeats=repeats, k=k, probe_resources=True,
+        ollama_url=os.environ.get("JARVIS_OLLAMA_URL"), on_progress=_progress,
+    )
+    print("\r" + " " * 60 + "\r", end="", file=sys.stderr, flush=True)
+    return format_compare_report(report) + _mismatch_hint(report.retrieval_hit_rate, opts, index)
 
 
 def handle_session_chat(session_store: SessionStore) -> str:

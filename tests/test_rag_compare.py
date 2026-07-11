@@ -4,7 +4,12 @@ import unittest
 
 from jarvis.config.manager import ConfigManager
 from jarvis.llm.gateway import LLMGateway
-from jarvis.rag.compare import compare_providers, format_compare_report
+from jarvis.rag.compare import (
+    Profile,
+    compare_configs,
+    compare_providers,
+    format_compare_report,
+)
 from jarvis.rag.evaluation import ControlQuestion
 from tests.fake_engine import FakeEngine
 
@@ -16,6 +21,7 @@ class FakeAgent:
         self._config = config
         self._answers = answers          # question -> grounded_answer dict (or {"raise": True})
         self.calls = []                  # (provider, model, rag_rewrite) seen per grounded call
+        self.runtimes = []               # full config.runtime snapshot per grounded call
 
     def rag_retrieve(self, question, index_name, k):
         # One chunk from the expected source → retrieval hit.
@@ -24,6 +30,7 @@ class FakeAgent:
     def grounded_answer(self, question, index_name=None, k=None):
         rt = self._config.runtime
         self.calls.append((rt.get("provider"), rt.get("model"), rt.get("rag_rewrite")))
+        self.runtimes.append(dict(rt))
         spec = self._answers[question]
         if spec.get("raise"):
             raise RuntimeError("boom")
@@ -126,6 +133,39 @@ class CompareTest(unittest.TestCase):
         self.assertEqual(local.error_rate, 0.5)   # 1 of 2 questions errored
         # Config still restored despite the error.
         self.assertNotIn("provider", cfg.runtime)
+
+    def test_compare_configs_applies_per_profile_overrides(self):
+        cfg = ConfigManager()
+        agent = FakeAgent(cfg, {"q1": _grounded("alpha kb.md"), "q2": _grounded("beta kb.md")})
+
+        report = compare_configs(
+            agent, cfg, _questions(), "kb",
+            profiles=[
+                Profile("local-base", "ollama", "qwen2.5:7b", {}),
+                Profile("local-opt", "ollama", "qwen-android", {"task_template": "android_interview"}),
+            ],
+            judge_gateway=_judge(), judge_model="cl", repeats=1, k=4,
+        )
+        self.assertEqual([p.column for p in report.providers], ["local-base", "local-opt"])
+        # First profile: no template; second: android_interview applied.
+        base_run = agent.runtimes[0]
+        opt_run = agent.runtimes[-1]
+        self.assertEqual(base_run.get("model"), "qwen2.5:7b")
+        self.assertNotIn("task_template", base_run)
+        self.assertEqual(opt_run.get("model"), "qwen-android")
+        self.assertEqual(opt_run.get("task_template"), "android_interview")
+
+    def test_probe_resources_off_by_default_makes_no_network_call(self):
+        # Default probe_resources=False → local profile runs with no /api/* call.
+        cfg = ConfigManager()
+        agent = FakeAgent(cfg, {"q1": _grounded("alpha kb.md"), "q2": _grounded("beta kb.md")})
+        report = compare_configs(
+            agent, cfg, _questions(), "kb",
+            profiles=[Profile("local", "ollama", "m", {})],
+            judge_gateway=_judge(), judge_model="cl", repeats=1, k=4,
+        )
+        self.assertIsNone(report.providers[0].tokens_per_sec)
+        self.assertIsNone(report.providers[0].vram_mb)
 
     def test_verdict_flip_detected(self):
         cfg = ConfigManager()

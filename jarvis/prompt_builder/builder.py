@@ -41,6 +41,28 @@ _EXPERT_PANEL_INSTRUCTION = (
 )
 
 
+# Task-specific prompt templates — the "change the prompt template for a specific
+# case" optimisation lever. Selected via the `task_template` config key and appended
+# to the system prompt, so it can be toggled on/off for a before/after comparison
+# without touching the base prompt. Kept as a small registry so new tasks can be
+# added in one place.
+_ANDROID_INTERVIEW_TEMPLATE = (
+    "[Task: Android/Kotlin technical-interview coach]\n"
+    "You help an Android engineer prepare for technical interviews on Kotlin, "
+    "coroutines, and Jetpack Compose. Answer using ONLY the provided context excerpts; "
+    "if the context does not cover the question, say so plainly rather than guessing. "
+    "Structure every answer as: (1) a one-sentence direct answer, (2) 2–4 concise "
+    "bullet points with the key technical details an interviewer wants to hear, and "
+    "(3) one short pitfall or follow-up the interviewer might probe. Prefer precise "
+    "terminology (structured concurrency, recomposition, immutability) over long "
+    "vague explanations. Never invent API names or behaviour."
+)
+
+TASK_TEMPLATES: dict[str, str] = {
+    "android_interview": _ANDROID_INTERVIEW_TEMPLATE,
+}
+
+
 # The orchestrator drives stage transitions in code; the agent only does the work
 # of the current stage. Each stage's role lives on its StageAgent
 # (jarvis/pipeline/stages.py) as the single source — build_system_prompt reads it
@@ -73,6 +95,13 @@ def build_system_prompt(
         parts.append(_STEP_BY_STEP_INSTRUCTION)
     elif strategy == "expert_panel":
         parts.append(_EXPERT_PANEL_INSTRUCTION)
+
+    # Task-specific template (optimisation lever): appended when `task_template`
+    # names a known template, so a specific case (e.g. Android interview coaching)
+    # gets a tuned prompt that can be toggled for the before/after comparison.
+    template = TASK_TEMPLATES.get(params.get("task_template", "none"))
+    if template:
+        parts.append(template)
 
     if profile and profile.strip():
         parts.append(f"[User Profile — style, constraints, context]\n{profile.strip()}")

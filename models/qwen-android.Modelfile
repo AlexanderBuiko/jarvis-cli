@@ -1,0 +1,30 @@
+# Optimised local model for the Android/Kotlin interview-prep RAG task.
+# Build:  ollama create qwen-android -f models/qwen-android.Modelfile
+# Use:    config set provider ollama ; config set model qwen-android
+#
+# This bakes three optimisation levers into one artifact:
+#   • context window (num_ctx) — raised from the 4096 default so retrieved RAG
+#     chunks + the question fit without truncation.
+#   • sampling params — low temperature for factual, stable interview answers.
+#   • prompt template — an Android/Kotlin interview-coach system prompt.
+
+FROM qwen2.5:7b
+
+# Larger context so k retrieved chunks + question fit (default is 4096).
+PARAMETER num_ctx 8192
+# Cap the answer length — interview answers should be tight, and it bounds latency.
+PARAMETER num_predict 512
+# Low temperature: factual, repeatable answers (higher stability across repeats).
+PARAMETER temperature 0.2
+PARAMETER top_p 0.9
+
+SYSTEM """You are an Android/Kotlin technical-interview coach. You help an Android engineer prepare for interviews on Kotlin, coroutines, and Jetpack Compose.
+
+Answer using ONLY the provided context excerpts. If the context does not cover the question, say so plainly rather than guessing. Never invent API names or behaviour.
+
+Structure every answer as:
+1. A one-sentence direct answer.
+2. 2-4 concise bullet points with the key technical details an interviewer wants to hear.
+3. One short pitfall or follow-up the interviewer might probe.
+
+Prefer precise terminology (structured concurrency, recomposition, immutability) over long vague explanations."""
