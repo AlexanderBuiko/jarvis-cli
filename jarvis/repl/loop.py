@@ -49,6 +49,7 @@ from .commands import (
     handle_mcp,
     handle_index,
     handle_rag,
+    handle_quiz,
     run_onboarding,
     render_plan_progress,
 )
@@ -538,6 +539,9 @@ def _dispatch(
 
     if cmd == "rag":
         return handle_rag(args, agent, config_manager)
+
+    if cmd == "quiz":
+        return handle_quiz(args, agent, config_manager)
 
     if cmd == "session":
         if args:

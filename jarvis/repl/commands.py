@@ -1246,6 +1246,113 @@ def _rag_bench(args: list[str], agent: JarvisAgent, config_manager: ConfigManage
     return format_compare_report(report) + _mismatch_hint(report.retrieval_hit_rate, opts, index)
 
 
+_QUIZ_USAGE = (
+    "Usage:\n"
+    "  quiz build [name=..] [count=40] [out=PATH] [seed=..]   Generate an MCQ pool from an index\n"
+    "  quiz upload [file=PATH] [url=..]                        Upload a reviewed pool to the server\n"
+    "The pool is generated locally from your KB (transformative MCQs only). Review the\n"
+    "file, then upload it to the bot server (needs url=/JARVIS_OLLAMA_URL + JARVIS_OLLAMA_API_KEY)."
+)
+
+
+def handle_quiz(args: list[str], agent: JarvisAgent, config_manager: ConfigManager) -> str:
+    """Generate an MCQ pool from a local index, and upload a reviewed pool to the server."""
+    sub = args[0].lower() if args else ""
+    rest = args[1:]
+    try:
+        if sub == "build":
+            return _quiz_build(rest, config_manager)
+        if sub == "upload":
+            return _quiz_upload(rest, config_manager)
+        return _QUIZ_USAGE
+    except Exception as exc:  # boundary: report, don't crash the REPL
+        return f"quiz error: {exc}"
+
+
+def _quiz_build(args: list[str], config_manager: ConfigManager) -> str:
+    import sys
+    from pathlib import Path
+
+    from ..llm.gateway import LLMGateway
+    from ..llm.router import current_provider, make_engine
+    from ..quiz import build_pool, mcqs_to_json
+
+    _, opts = _split_index_args(args)
+    name = opts.get("name") or config_manager.runtime.get("rag_index")
+    if not name:
+        return "No index. Use 'quiz build name=<index>' (see 'index list')."
+    loaded = IndexStore().load(name)
+    if not loaded:
+        return f"No such index: '{name}'."
+    _header, records = loaded
+    count = int(opts.get("count", 40))
+    seed = int(opts["seed"]) if opts.get("seed") else None
+    out = opts.get("out") or f"quiz_pool_{name}.json"
+
+    # Generation runs on the CLI's active engine (set provider=ollama + a local model
+    # for a fully-local, private build).
+    gateway = LLMGateway(make_engine(current_provider(config_manager)))
+    model = config_manager.runtime.get("model")
+
+    def complete(messages: list[dict], params: dict) -> str:
+        p = {**params, "temperature": 0.2}
+        if model:
+            p["model"] = model
+        return gateway.complete(messages, p).text
+
+    def _progress(done: int, total: int) -> None:
+        print(f"\r  generating… {done}/{total} clean MCQs", end="", file=sys.stderr, flush=True)
+
+    pool = build_pool(records, complete, count=count, seed=seed, on_progress=_progress)
+    print("\r" + " " * 44 + "\r", end="", file=sys.stderr, flush=True)
+
+    Path(out).write_text(mcqs_to_json(pool), encoding="utf-8")
+    topics: dict[str, int] = {}
+    for m in pool:
+        topics[m.topic] = topics.get(m.topic, 0) + 1
+    tsum = ", ".join(f"{t}:{n}" for t, n in sorted(topics.items())) or "—"
+    return (f"Built {len(pool)} MCQs → {out}  ({tsum})\n"
+            f"Review the file, then:  quiz upload file={out} url=<server-base-url>")
+
+
+def _quiz_upload(args: list[str], config_manager: ConfigManager) -> str:
+    import json
+    import os
+    from pathlib import Path
+
+    import requests
+
+    from ..quiz import validate_pool
+
+    _, opts = _split_index_args(args)
+    path = opts.get("file")
+    if not path:
+        return "Usage: quiz upload file=<pool.json> url=<server-base-url>"
+    url = opts.get("url") or os.environ.get("JARVIS_OLLAMA_URL")
+    if not url:
+        return "No server URL. Pass url=http://host:8080 or set JARVIS_OLLAMA_URL."
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception as exc:
+        return f"cannot read pool '{path}': {exc}"
+    errors = validate_pool(data)
+    if errors:
+        return "Pool invalid — not uploading:\n  - " + "\n  - ".join(errors[:10])
+
+    endpoint = url.rstrip("/") + "/quiz/pool"
+    headers = {"Content-Type": "application/json"}
+    key = os.environ.get("JARVIS_OLLAMA_API_KEY", "").strip()
+    if key:
+        headers["X-API-Key"] = key
+    try:
+        resp = requests.post(endpoint, json=data, headers=headers, timeout=30)
+    except requests.RequestException as exc:
+        return f"upload failed (server unreachable at {endpoint}): {exc}"
+    if resp.status_code == 200:
+        return f"Uploaded {len(data)} questions to {endpoint}. ✓"
+    return f"upload rejected: HTTP {resp.status_code}: {resp.text[:200]}"
+
+
 def handle_session_chat(session_store: SessionStore) -> str:
     return session_store.format_chat()
 
