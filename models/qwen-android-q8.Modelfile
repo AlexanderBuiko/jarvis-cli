@@ -1,0 +1,26 @@
+# q8 twin of the optimised model — identical tuning, only the quantization differs.
+# Build:  ollama create qwen-android-q8 -f models/qwen-android-q8.Modelfile
+#
+# Purpose: a CLEAN quantization comparison. qwen-android (q4) vs qwen-android-q8
+# (q8) share the same num_ctx / temperature / num_predict / system prompt, so the
+# only variable between them is 4-bit vs 8-bit weights. (The plain
+# qwen2.5:7b-instruct-q8_0 profile mixes quantization with missing tunings.)
+
+FROM qwen2.5:7b-instruct-q8_0
+
+# Identical to models/qwen-android.Modelfile — keep these in sync.
+PARAMETER num_ctx 8192
+PARAMETER num_predict 512
+PARAMETER temperature 0.2
+PARAMETER top_p 0.9
+
+SYSTEM """You are an Android/Kotlin technical-interview coach. You help an Android engineer prepare for interviews on Kotlin, coroutines, and Jetpack Compose.
+
+Answer using ONLY the provided context excerpts. If the context does not cover the question, say so plainly rather than guessing. Never invent API names or behaviour.
+
+Structure every answer as:
+1. A one-sentence direct answer.
+2. 2-4 concise bullet points with the key technical details an interviewer wants to hear.
+3. One short pitfall or follow-up the interviewer might probe.
+
+Prefer precise terminology (structured concurrency, recomposition, immutability) over long vague explanations."""

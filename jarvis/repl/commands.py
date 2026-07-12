@@ -995,7 +995,7 @@ _RAG_USAGE = (
     "  rag compare [name=..] [k=..] [repeats=3] [n=..]  Local vs cloud: quality/speed/stability\n"
     "              [local=qwen2.5:7b] [cloud=google/gemini-2.5-flash]\n"
     "  rag bench [name=..] [k=..] [repeats=2] [n=..]    Optimization matrix: base vs optimized,\n"
-    "              [opt=qwen-android] [q8=..] [quant=on|off]   local vs cloud + resources\n"
+    "              [opt=qwen-android] [q8=..] [q8opt=qwen-android-q8] [quant=on|off]   + resources\n"
     "Note: 'rag ask' = 2 calls; 'rag eval' = ~2×questions; 'rag compare'/'rag bench' run\n"
     "      each profile × repeats (retrieval stays local; needs OPENROUTER_API_KEY for cloud)."
 )
@@ -1203,9 +1203,11 @@ def _rag_bench(args: list[str], agent: JarvisAgent, config_manager: ConfigManage
         return ("'rag bench' needs OPENROUTER_API_KEY for the cloud profiles and the "
                 "shared judge. Set it, or use 'rag eval' for a local-only run.")
 
-    # The optimization matrix. local-base → local-opt shows the before/after; the q8
-    # profile is the quantization axis; the cloud pair shows local↔cloud with and
-    # without the same prompt optimization.
+    # The optimization matrix. local-base → local-opt shows the before/after. The q8
+    # profiles are the quantization axis: 'local-q8' is the raw q8 base (mixes quant
+    # with the missing tunings), while 'local-q8-opt' is the q8 twin of local-opt —
+    # same num_ctx/temperature/prompt, so local-opt vs local-q8-opt isolates 4-bit vs
+    # 8-bit cleanly. The cloud pair shows local↔cloud with/without the prompt opt.
     profiles = [
         Profile("local-base", "ollama", opts.get("base", "qwen2.5:7b"), {}),
         Profile("local-opt", "ollama", opts.get("opt", "qwen-android"),
@@ -1214,6 +1216,9 @@ def _rag_bench(args: list[str], agent: JarvisAgent, config_manager: ConfigManage
     if opts.get("quant", "on").lower() not in ("off", "false", "no", "0"):
         profiles.append(Profile("local-q8", "ollama",
                                 opts.get("q8", "qwen2.5:7b-instruct-q8_0"),
+                                {"task_template": template}))
+        profiles.append(Profile("local-q8-opt", "ollama",
+                                opts.get("q8opt", "qwen-android-q8"),
                                 {"task_template": template}))
     profiles += [
         Profile("cloud-base", "openrouter", cloud_model, {}),
