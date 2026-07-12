@@ -49,7 +49,14 @@ class OllamaClient:
             url or os.environ.get("JARVIS_OLLAMA_URL") or "http://localhost:11434"
         ).rstrip("/")
         self.timeout = timeout
+        # Optional X-API-Key sent on every call. Lets the CLI talk to an
+        # authenticated remote LLM service (the jarvis-mcp-server chat proxy) rather
+        # than only a bare local daemon. Unset → no header (plain local Ollama).
+        self.api_key = (os.environ.get("JARVIS_OLLAMA_API_KEY") or "").strip()
         self._context_window_cache: dict[str, int | None] = {}
+
+    def _headers(self) -> dict:
+        return {"X-API-Key": self.api_key} if self.api_key else {}
 
     def complete(
         self,
@@ -63,6 +70,7 @@ class OllamaClient:
             response = requests.post(
                 f"{self.url}/v1/chat/completions",
                 json=payload,
+                headers=self._headers(),
                 timeout=self.timeout,
             )
         except requests.RequestException as exc:
@@ -123,7 +131,8 @@ class OllamaClient:
     def _fetch_context_window(self, model_id: str) -> int | None:
         try:
             resp = requests.post(
-                f"{self.url}/api/show", json={"name": model_id}, timeout=10
+                f"{self.url}/api/show", json={"name": model_id},
+                headers=self._headers(), timeout=10
             )
             if resp.status_code != 200:
                 return None

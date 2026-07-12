@@ -83,6 +83,27 @@ class CompleteTest(unittest.TestCase):
         self.assertIn("model not found", str(ctx.exception))
 
 
+class AuthHeaderTest(unittest.TestCase):
+    def test_api_key_sent_when_set(self):
+        resp = _chat_response()
+        with mock.patch.dict(os.environ, {"JARVIS_OLLAMA_API_KEY": "secret"}), \
+             mock.patch("jarvis.ollama.client.requests.post", return_value=resp) as post:
+            OllamaClient(model="qwen2.5:7b").complete(
+                [{"role": "user", "content": "hi"}], {}
+            )
+        self.assertEqual(post.call_args[1]["headers"], {"X-API-Key": "secret"})
+
+    def test_no_header_when_unset(self):
+        resp = _chat_response()
+        with mock.patch.dict(os.environ, {}, clear=False), \
+             mock.patch("jarvis.ollama.client.requests.post", return_value=resp) as post:
+            os.environ.pop("JARVIS_OLLAMA_API_KEY", None)
+            OllamaClient(model="qwen2.5:7b").complete(
+                [{"role": "user", "content": "hi"}], {}
+            )
+        self.assertEqual(post.call_args[1]["headers"], {})
+
+
 class ContextWindowTest(unittest.TestCase):
     def test_reads_and_caches_context_length(self):
         show = mock.Mock(status_code=200, json=mock.Mock(return_value={
