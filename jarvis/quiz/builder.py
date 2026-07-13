@@ -48,10 +48,30 @@ _SYSTEM = (
     "You write multiple-choice questions to help an Android engineer prepare for "
     "technical interviews. Given a REFERENCE passage, write ONE question that tests "
     "understanding of a concept in it. Do NOT quote or copy the passage — phrase the "
-    "question and options in your own words. Provide exactly four options: one clearly "
-    "correct and three plausible but incorrect. Do not mention the reference, its "
-    "source, a book, or a filename. Respond with ONLY a JSON object of the form: "
+    "question and options in your own words. The question must be FULLY STANDALONE: "
+    "someone who sees only the question and the four options must be able to answer "
+    "it. Never refer to 'the reference', 'the passage', 'the example provided', 'the "
+    "text', a chapter, a book, a guide, a figure, or any external material — ask about "
+    "the concept itself. Provide exactly four options: one clearly correct and three "
+    "plausible but incorrect. Respond with ONLY a JSON object of the form: "
     '{"question": "...", "options": ["...","...","...","..."], "correct_index": 0}'
+)
+
+# Phrases that reference external/source material rather than testing a standalone
+# concept. Such questions both leak that a source exists and are unanswerable out of
+# context, so they are rejected (and regenerated).
+_SOURCE_REF = re.compile(
+    r"\b("
+    r"the (example|text|passage|reference|snippet|book|guide|document|excerpt|"
+    r"author|figure|diagram|chapter|code above|code below|following)"
+    r"|(example|code|snippet|passage|text) (provided|above|below|shown|given)"
+    r"|provided (example|code|snippet|text)"
+    r"|chapter \d+"
+    r"|as (shown|described|mentioned|discussed|illustrated) (above|below|earlier)"
+    r"|according to the (text|passage|reference|author|book|guide)"
+    r"|in the (provided|given|above|following)"
+    r")\b",
+    re.IGNORECASE,
 )
 
 
@@ -123,10 +143,11 @@ def _valid_shape(obj: dict) -> bool:
 
 
 def _leaks(obj: dict, source_words: list[str]) -> bool:
-    """True if the question or any option copies source text or names a file."""
+    """True if the question/options copy source text, name a file, or reference the
+    source material (all of which either leak the source or aren't standalone)."""
     parts = [obj["question"], *obj["options"]]
     for p in parts:
-        if ".md" in p.lower() or _has_verbatim_span(p, source_words):
+        if ".md" in p.lower() or _SOURCE_REF.search(p) or _has_verbatim_span(p, source_words):
             return True
     return False
 

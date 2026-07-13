@@ -97,6 +97,22 @@ class BuildPoolTest(unittest.TestCase):
         pool = build_pool(self._records(1), lambda m, p: leaked, count=5, seed=1)
         self.assertEqual(pool, [])
 
+    def test_rejects_source_referencing_questions(self):
+        # Questions that point at external material (leak the source, not standalone).
+        for bad in [
+            "What does the hashCode function do in the example provided?",
+            "What is emphasized in Chapter 1 of the Kotlin safety guide?",
+            "According to the passage, what does a coroutine scope do?",
+            "What does the code above return?",
+        ]:
+            pool = build_pool(self._records(1), lambda m, p: _mcq_json(question=bad), count=5, seed=1)
+            self.assertEqual(pool, [], f"should reject: {bad}")
+
+    def test_keeps_standalone_questions(self):
+        good = "What does a CoroutineScope guarantee about the coroutines launched in it?"
+        pool = build_pool(self._records(1), lambda m, p: _mcq_json(question=good), count=5, seed=1)
+        self.assertEqual(len(pool), 1)
+
 
 class ValidatePoolTest(unittest.TestCase):
     def test_accepts_good_pool(self):
