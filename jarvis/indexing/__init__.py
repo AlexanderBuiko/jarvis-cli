@@ -22,7 +22,7 @@ from .embeddings import (
     FakeEmbedder,
     make_embedder,
 )
-from .store import IndexStore, normalize, cosine_top_k
+from .store import IndexStore, normalize, cosine_top_k, default_index_dir
 from .pipeline import IndexPipeline, BuildResult
 
 __all__ = [
@@ -38,6 +38,7 @@ __all__ = [
     "FakeEmbedder",
     "make_embedder",
     "IndexStore",
+    "default_index_dir",
     "normalize",
     "cosine_top_k",
     "IndexPipeline",
