@@ -1,0 +1,46 @@
+# Reactive AI code review: on every PR, fetch the diff, ask the remote /review brain
+# to review it against the project's code + docs (RAG), and post the review as a PR
+# comment. The brain (jarvis-mcp-server) holds no GitHub credentials — this workflow
+# holds GITHUB_TOKEN and does all GitHub I/O (Option A). Human-in-the-loop stays on
+# GitHub: the comment is advisory; a human decides the merge.
+#
+# Required repo secrets:
+#   REVIEW_SERVER_URL  base URL of a PUBLICLY reachable jarvis-mcp-server (e.g. the
+#                      Cloud Run URL). GitHub's runners can't reach localhost.
+#   MCP_API_KEY        the server's X-API-Key.
+name: AI Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# Only need to read the code and write PR comments.
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  ai-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the PR
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so base...head diff is available
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install the reviewer
+        run: pip install -e .
+
+      - name: Review the PR
+        # Advisory: don't fail the whole check if the brain is unavailable.
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REVIEW_SERVER_URL: ${{ secrets.REVIEW_SERVER_URL }}
+          MCP_API_KEY: ${{ secrets.MCP_API_KEY }}
+        run: python -m jarvis.review

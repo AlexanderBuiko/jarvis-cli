@@ -68,6 +68,7 @@ Commands
   stage; 'mcp' is for inspecting/calling them by hand.
 
   index build <path> [k=v ...]  Load → chunk → embed → store a document index
+                                (suffixes=.py,.md to index code, e.g. for PR review)
   index list                    List saved indexes
   index show [name]             Show an index's header and sample chunks
   index search <query> [k=v]    Semantic search over an index (name=, k=)
@@ -872,7 +873,7 @@ def _handle_mcp_adhoc(sub, args, parse_kwargs) -> str:
 
 _INDEX_USAGE = (
     "Usage:\n"
-    "  index build <path> [name=..] [strategy=fixed|structure] [size=..] [overlap=..] [provider=..] [model=..]\n"
+    "  index build <path> [name=..] [strategy=fixed|structure] [size=..] [overlap=..] [suffixes=.py,.md] [provider=..] [model=..]\n"
     "  index list\n"
     "  index show [name]\n"
     "  index search <query words…> [name=..] [k=5]\n"
@@ -928,6 +929,18 @@ def _default_index_name(path: str, strategy: str) -> str:
     return f"{slug}-{strategy}"
 
 
+def _parse_suffixes(raw: str | None) -> frozenset[str] | None:
+    """Parse a ``suffixes=`` option (e.g. ".py,.md" or "py,md") into a suffix set.
+
+    Each entry is lowercased and given a leading dot. ``None`` → the loader default.
+    """
+    if not raw:
+        return None
+    parts = [p.strip().lower() for p in raw.split(",") if p.strip()]
+    normalized = {p if p.startswith(".") else f".{p}" for p in parts}
+    return frozenset(normalized) or None
+
+
 def _index_build(args: list[str]) -> str:
     positional, opts = _split_index_args(args)
     if not positional:
@@ -937,9 +950,11 @@ def _index_build(args: list[str]) -> str:
     name = opts.get("name") or _default_index_name(path, strategy)
     size = int(opts.get("size", DEFAULT_SIZE))
     overlap = int(opts.get("overlap", DEFAULT_OVERLAP))
+    suffixes = _parse_suffixes(opts.get("suffixes"))
     embedder = make_embedder(opts.get("provider"), opts.get("model"))
     pipeline = IndexPipeline(embedder)
-    res = pipeline.build(path, name, strategy=strategy, size=size, overlap=overlap)
+    res = pipeline.build(path, name, strategy=strategy, size=size, overlap=overlap,
+                         suffixes=suffixes)
     return (
         f"Built index '{res.name}'\n"
         f"  strategy:   {res.strategy}  (size={res.size}, overlap={res.overlap} chars)\n"
