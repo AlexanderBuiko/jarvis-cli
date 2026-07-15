@@ -20,8 +20,9 @@ env/
 # their extracted text). The index is rebuilt locally from your own copies.
 knowledge_base/android/
 
-# Local secrets / config (never commit). .env.example is the committed template.
+# Local secrets / config (never commit). The .example files are the committed templates.
 .env
+servers.json
 
 # IDE
 .idea/

@@ -38,6 +38,9 @@ Modes
 Commands
 ────────
   help                          Show this help message
+  help <question>               Ask the project assistant about jarvis-cli
+                                (RAG over the docs, grounded + cited; includes the
+                                current git branch via MCP)
 
   config show                   Show active configuration parameters
   config set <key> <val>        Set a parameter
@@ -198,6 +201,95 @@ Parameters
 
 def handle_help() -> str:
     return HELP_TEXT + "\n"
+
+
+def _help_endpoint() -> tuple[str | None, str | None]:
+    """Resolve the server /help URL. Returns (endpoint, error).
+
+    Uses ``JARVIS_HELP_URL`` if set, else derives the server base from
+    ``JARVIS_MCP_URL`` (the MCP endpoint, e.g. ``http://host:8080/mcp``) by dropping
+    a trailing ``/mcp``, since /help is a plain route at the server root.
+    """
+    import os
+
+    base = os.environ.get("JARVIS_HELP_URL", "").strip()
+    if not base:
+        mcp_url = (os.environ.get("JARVIS_MCP_URL", "").strip()
+                   or os.environ.get("JARVIS_TIME_MCP_URL", "").strip())
+        if not mcp_url:
+            return None, (
+                "'help <question>' needs the server URL. Set JARVIS_HELP_URL="
+                "http://host:8080 (or JARVIS_MCP_URL to the server's /mcp endpoint)."
+            )
+        base = mcp_url.rstrip("/")
+        if base.endswith("/mcp"):
+            base = base[: -len("/mcp")]
+    return base.rstrip("/") + "/help", None
+
+
+def _current_branch(agent: JarvisAgent) -> str | None:
+    """Best-effort current git branch via the local git MCP tool (None on failure)."""
+    provider = agent.tool_provider
+    if provider is None:
+        return None
+    try:
+        branch = provider.call_tool("git.get_current_branch", {})
+    except Exception:  # noqa: BLE001 — branch context is optional
+        return None
+    branch = (branch or "").strip()
+    if not branch or branch.lower().startswith("error"):
+        return None
+    return branch
+
+
+def handle_help_query(question: str, agent: JarvisAgent) -> str:
+    """Ask the remote project assistant a question about jarvis-cli.
+
+    Thin client: fetch the current git branch via the local git MCP tool, POST
+    ``{question, branch}`` to the server's ``/help`` endpoint (authenticated with
+    ``MCP_API_KEY`` as ``X-API-Key``), and render the grounded, cited answer.
+    """
+    import os
+
+    import requests
+
+    endpoint, error = _help_endpoint()
+    if error:
+        return error
+
+    branch = _current_branch(agent)
+    headers = {"Content-Type": "application/json"}
+    key = os.environ.get("MCP_API_KEY", "").strip()
+    if key:
+        headers["X-API-Key"] = key
+
+    try:
+        resp = requests.post(
+            endpoint, json={"question": question, "branch": branch},
+            headers=headers, timeout=120,
+        )
+    except requests.RequestException as exc:
+        return f"help: server unreachable at {endpoint}: {exc}"
+
+    if resp.status_code != 200:
+        try:
+            detail = resp.json().get("error", resp.text[:200])
+        except Exception:  # noqa: BLE001
+            detail = resp.text[:200]
+        return f"help: server error (HTTP {resp.status_code}): {detail}"
+
+    try:
+        data = resp.json()
+    except Exception:  # noqa: BLE001
+        return f"help: invalid response from server: {resp.text[:200]}"
+
+    sep = "─" * 60
+    header = f"Project assistant  (branch: {branch})" if branch else "Project assistant"
+    lines = [header, sep, data.get("answer", "(no answer)").rstrip()]
+    notice = data.get("notice")
+    if notice:
+        lines += [sep, f"· {notice}"]
+    return "\n".join(lines)
 
 
 def handle_config_show(config_manager: ConfigManager) -> str:

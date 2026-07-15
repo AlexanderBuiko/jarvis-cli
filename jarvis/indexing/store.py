@@ -21,8 +21,27 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Env var overriding where indexes are read/written. Kept here (not in a call site)
+# so every ``IndexStore()`` — CLI build, REPL, and the remote server that reuses this
+# class — resolves the same directory. This is the "config not code" seam: point it
+# at a mounted GCS bucket on Cloud Run and nothing else changes.
+INDEX_DIR_ENV = "JARVIS_INDEX_DIR"
+
+
+def default_index_dir() -> Path:
+    """Resolve the index directory from ``JARVIS_INDEX_DIR``, else ``~/.jarvis/indexes``.
+
+    Read at call time (not import) so it reflects env/.env loaded at startup and stays
+    test-isolatable via ``$HOME`` / the env var.
+    """
+    override = os.environ.get(INDEX_DIR_ENV, "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / ".jarvis" / "indexes"
 
 
 def normalize(vec: list[float]) -> list[float]:
@@ -62,8 +81,9 @@ def cosine_top_k(
 
 class IndexStore:
     def __init__(self, directory: Path | None = None) -> None:
-        # Resolve home at instantiation (not import) so $HOME-based test isolation works.
-        self._dir = directory or (Path.home() / ".jarvis" / "indexes")
+        # Resolve at instantiation (not import) so $HOME/env-based isolation works.
+        # Default honours JARVIS_INDEX_DIR (see default_index_dir).
+        self._dir = directory or default_index_dir()
 
     # ── Write ────────────────────────────────────────────────────────────────
 
