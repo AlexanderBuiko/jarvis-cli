@@ -62,13 +62,19 @@ class IndexPipeline:
         strategy: str = "structure",
         size: int = DEFAULT_SIZE,
         overlap: int = DEFAULT_OVERLAP,
+        suffixes: frozenset[str] | None = None,
     ) -> BuildResult:
-        """Load, chunk, embed, and store an index. Returns a summary."""
+        """Load, chunk, embed, and store an index. Returns a summary.
+
+        ``suffixes`` overrides which file extensions are indexed (default: the
+        loader's text set, ``.md``/``.markdown``/``.txt``). Pass e.g.
+        ``frozenset({'.py'})`` to build a code index — no loader change needed.
+        """
         if strategy not in CHUNKERS:
             raise ValueError(
                 f"Unknown strategy '{strategy}'. Use one of: {', '.join(CHUNKERS)}."
             )
-        docs = load_documents(path)
+        docs = load_documents(path, suffixes) if suffixes else load_documents(path)
         if not docs:
             raise ValueError(f"No indexable documents found at: {path}")
 
