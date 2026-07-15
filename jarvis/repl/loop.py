@@ -19,6 +19,7 @@ from typing import Callable
 from .commands import (
     handle_help,
     handle_help_query,
+    handle_support_query,
     handle_config_show,
     handle_config_set,
     handle_config_update,
@@ -440,6 +441,9 @@ def _dispatch(
         if args:
             return handle_help_query(" ".join(args), agent)
         return handle_help()
+
+    if cmd == "support":
+        return handle_support_query(args, agent)
 
     if cmd == "config":
         if not args:

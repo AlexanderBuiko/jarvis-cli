@@ -41,6 +41,10 @@ Commands
   help <question>               Ask the project assistant about jarvis-cli
                                 (RAG over the docs, grounded + cited; includes the
                                 current git branch via MCP)
+  support <question> [ticket=T-… | user=U-…] [debug]
+                                Support assistant: answer grounded in the FAQ and
+                                tailored to the user's ticket/CRM context. Plain prose
+                                by default; add 'debug' to show sources + quotes.
 
   config show                   Show active configuration parameters
   config set <key> <val>        Set a parameter
@@ -286,6 +290,99 @@ def handle_help_query(question: str, agent: JarvisAgent) -> str:
 
     sep = "─" * 60
     header = f"Project assistant  (branch: {branch})" if branch else "Project assistant"
+    lines = [header, sep, data.get("answer", "(no answer)").rstrip()]
+    notice = data.get("notice")
+    if notice:
+        lines += [sep, f"· {notice}"]
+    return "\n".join(lines)
+
+
+def _support_endpoint() -> tuple[str | None, str | None]:
+    """Resolve the server /support URL (like _help_endpoint, for the support brain)."""
+    import os
+
+    base = os.environ.get("JARVIS_SUPPORT_URL", "").strip()
+    if not base:
+        mcp_url = (os.environ.get("JARVIS_MCP_URL", "").strip()
+                   or os.environ.get("JARVIS_TIME_MCP_URL", "").strip())
+        if not mcp_url:
+            return None, (
+                "'support <question>' needs the server URL. Set JARVIS_SUPPORT_URL="
+                "http://host:8080 (or JARVIS_MCP_URL to the server's /mcp endpoint)."
+            )
+        base = mcp_url.rstrip("/")
+        if base.endswith("/mcp"):
+            base = base[: -len("/mcp")]
+    return base.rstrip("/") + "/support", None
+
+
+def handle_support_query(args: list[str], agent: JarvisAgent) -> str:
+    """Ask the support assistant, optionally about a specific ticket/user.
+
+    Splits ``ticket=…`` / ``user=…`` from the question words, POSTs
+    ``{question, ticket_id?, user_id?}`` to the server's ``/support`` endpoint
+    (authenticated with ``MCP_API_KEY``), and renders the ticket-aware answer.
+    """
+    import os
+
+    import requests
+
+    question_words: list[str] = []
+    ticket_id = user_id = style = None
+    for token in args:
+        low = token.lower()
+        if low.startswith("ticket="):
+            ticket_id = token.split("=", 1)[1]
+        elif low.startswith("user="):
+            user_id = token.split("=", 1)[1]
+        elif low in ("debug", "sources=on", "sources=true"):
+            style = "debug"
+        elif low in ("sources=off", "plain"):
+            style = "plain"
+        else:
+            question_words.append(token)
+    question = " ".join(question_words).strip()
+    if not question:
+        return "Usage: support <question> [ticket=T-…] [user=U-…] [debug]"
+
+    endpoint, error = _support_endpoint()
+    if error:
+        return error
+
+    headers = {"Content-Type": "application/json"}
+    key = os.environ.get("MCP_API_KEY", "").strip()
+    if key:
+        headers["X-API-Key"] = key
+    payload: dict = {"question": question}
+    if ticket_id:
+        payload["ticket_id"] = ticket_id
+    if user_id:
+        payload["user_id"] = user_id
+    if style:
+        payload["style"] = style
+
+    try:
+        resp = requests.post(endpoint, json=payload, headers=headers, timeout=120)
+    except requests.RequestException as exc:
+        return f"support: server unreachable at {endpoint}: {exc}"
+
+    if resp.status_code != 200:
+        try:
+            detail = resp.json().get("error", resp.text[:200])
+        except Exception:  # noqa: BLE001
+            detail = resp.text[:200]
+        return f"support: server error (HTTP {resp.status_code}): {detail}"
+
+    try:
+        data = resp.json()
+    except Exception:  # noqa: BLE001
+        return f"support: invalid response from server: {resp.text[:200]}"
+
+    sep = "─" * 60
+    ticket = data.get("ticket")
+    header = "Support assistant"
+    if ticket:
+        header += f"  (ticket {ticket.get('id')}: {ticket.get('subject')})"
     lines = [header, sep, data.get("answer", "(no answer)").rstrip()]
     notice = data.get("notice")
     if notice:
