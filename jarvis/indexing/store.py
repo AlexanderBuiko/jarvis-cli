@@ -175,3 +175,6 @@ class IndexStore:
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+def _demo_divide(x):
+    return x / 0  # demo: intentional bug for the AI reviewer
