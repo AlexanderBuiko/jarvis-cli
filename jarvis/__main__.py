@@ -29,6 +29,22 @@ def _start_mcp():
     return provider, status
 
 
+def _build_tool_gate(tool_provider, config_manager):
+    """A ToolPermissions gate for mutating tool calls, or None if MCP is off.
+
+    Writes that aren't pre-authorised are queued and approved *after* the turn by the
+    REPL (see ``_process_pending_writes``), on the main thread — the spinner's worker
+    thread can't own the terminal to prompt. Standing authorisation comes from
+    ``config set file_writes auto``, read live so the toggle works without a restart.
+    """
+    if tool_provider is None:
+        return None
+    from .mcp.permissions import ToolPermissions
+
+    live_auto = lambda: config_manager.runtime.get("file_writes") == "auto"
+    return ToolPermissions(auto=live_auto)
+
+
 def main() -> None:
     # Load ~/.jarvis/.env and ./.env before anything reads the environment, so
     # OPENROUTER_API_KEY / JARVIS_MCP_URL etc. come from config files and
@@ -51,10 +67,11 @@ def main() -> None:
     # no OPENROUTER_API_KEY (and vice-versa). A missing key surfaces only if/when a
     # turn actually routes to the cloud engine.
     from .llm.router import EngineRouter
-    router = EngineRouter(config_manager, tool_provider=tool_provider)
+    tool_gate = _build_tool_gate(tool_provider, config_manager)
+    router = EngineRouter(config_manager, tool_provider=tool_provider, tool_gate=tool_gate)
     agent = JarvisAgent(None, config_manager, tool_provider=tool_provider, router=router)
     try:
-        run_repl(agent, config_manager)
+        run_repl(agent, config_manager, tool_gate=tool_gate)
     finally:
         if tool_provider is not None:
             tool_provider.close()

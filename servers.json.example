@@ -1,5 +1,5 @@
 {
-  "_comment": "Multi-server MCP fleet for jarvis-cli. Copy to ./servers.json or ~/.jarvis/servers.json (or point JARVIS_SERVERS_FILE at it). The agent aggregates every server's tools, namespaced as <name>.<tool>, and routes each call to the owning server. ${VAR} in any string is expanded from the environment, so secrets stay out of this file. The 'git' server is a LOCAL stdio server bundled with the CLI — it reads the developer's working-tree state (e.g. the current branch), which a remote server can't see; it inspects GIT_REPO_PATH if set, else the CLI's working directory. The translation server is LibreTranslate (free, no API key) pointed at a public instance via LIBRETRANSLATE_API_URL — swap the URL for another instance or a self-hosted one for better quality/reliability.",
+  "_comment": "Multi-server MCP fleet for jarvis-cli. Copy to ./servers.json or ~/.jarvis/servers.json (or point JARVIS_SERVERS_FILE at it). The agent aggregates every server's tools, namespaced as <name>.<tool>, and routes each call to the owning server. ${VAR} in any string is expanded from the environment, so secrets stay out of this file. The 'git' and 'files' servers are LOCAL stdio servers bundled with the CLI — they operate on the developer's working tree, which a remote server can't see. 'git' reads GIT_REPO_PATH (else cwd); 'files' reads/searches/edits under JARVIS_FILES_ROOT (else cwd), and its write_file is gated by the file-writes permission (config set file_writes ask|auto). The translation server is LibreTranslate (free, no API key) pointed at a public instance via LIBRETRANSLATE_API_URL — swap the URL for another instance or a self-hosted one for better quality/reliability.",
   "servers": [
     {
       "name": "jarvis",
@@ -12,6 +12,12 @@
       "transport": "stdio",
       "command": "python3",
       "args": ["-m", "jarvis.mcp_servers.git_server"]
+    },
+    {
+      "name": "files",
+      "transport": "stdio",
+      "command": "python3",
+      "args": ["-m", "jarvis.mcp_servers.files_server"]
     },
     {
       "name": "translation",

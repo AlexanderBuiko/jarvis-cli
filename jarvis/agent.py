@@ -5,6 +5,7 @@ Owns conversation history and coordinates the full request/response pipeline.
 The REPL and any other interface interact with Jarvis exclusively through this class.
 """
 
+import logging
 from pathlib import Path
 
 from .config.manager import ConfigManager
@@ -26,7 +27,12 @@ from .prompt_builder.builder import (
     build_prompt_generation_request,
 )
 from .indexing import IndexPipeline, IndexStore, make_embedder
-from .rag.cite import build_citations, idk_message, strip_trailing_citations
+from .rag.cite import (
+    build_citations,
+    idk_message,
+    strip_inline_citations,
+    strip_trailing_citations,
+)
 from .conversation.service import ConversationService
 from .session.store import SessionStore
 from .session.task_store import TaskStore
@@ -147,6 +153,15 @@ class JarvisAgent:
         response_text, notices = self._run_turn(user_input)
         return "\n\n".join([response_text] + notices)
 
+    def chat_detailed(self, user_input: str) -> tuple[str, list[str]]:
+        """Like :meth:`chat`, but returns ``(answer, notices)`` separately.
+
+        The notices are the turn's process meta (RAG grounding, invariant rework,
+        context compression, personalisation nudge) — the REPL renders them in a dim
+        trace block, distinct from the answer, instead of appending them to it.
+        """
+        return self._run_turn(user_input)
+
     def _run_turn(self, user_input: str, *, extra_system: str | None = None) -> tuple[str, list[str]]:
         """Core request/response cycle. Returns (response_text, notices).
 
@@ -252,13 +267,18 @@ class JarvisAgent:
                 )
                 finish_reason = completion.finish_reason
 
-            # Mandatory citations: append verbatim Sources + Quotes for the chunks
-            # the grounded answer used (hybrid — the model marked them with [n]).
-            if rag_results and params.get("rag_cite", True):
-                appendix = build_citations(rag_results, response_text, user_input)
-                if appendix:
-                    body = strip_trailing_citations(response_text)
-                    response_text = f"{body}\n\n{appendix}"
+            # Citations are a DEBUG view, off by default: plain mode returns clean prose
+            # (inline [n] stripped, no Sources/Quotes block); `config set rag_cite on`
+            # appends the verbatim Sources + Quotes for the chunks the answer used.
+            if rag_results:
+                if params.get("rag_cite", False):
+                    appendix = build_citations(rag_results, response_text, user_input)
+                    if appendix:
+                        response_text = f"{strip_trailing_citations(response_text)}\n\n{appendix}"
+                else:
+                    response_text = strip_inline_citations(
+                        strip_trailing_citations(response_text)
+                    ).strip()
 
         # Persist user/assistant turn; tag with topic when the topics strategy is active.
         user_msg: dict = {"role": "user", "content": user_input}
@@ -430,6 +450,13 @@ class JarvisAgent:
         """
         index_name = params.get("rag_index")
         raw, enhanced, error, info = self._retrieve_enhanced(question, index_name, params)
+        # Live "in the moment" note (the REPL prints jarvis.tools records as they land):
+        # one per RAG request, styled as a RAG note.
+        logging.getLogger("jarvis.tools").info(
+            "RAG: %s",
+            f"retrieval failed: {error}" if error
+            else f"retrieved {len(enhanced)} chunk(s) from '{index_name}'",
+        )
         if error:
             if not index_name:
                 return [], [], None, "RAG is on but no rag_index is set — answering without it. Set one: config set rag_index <name>", info

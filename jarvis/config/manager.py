@@ -46,6 +46,7 @@ _PARAM_PARSERS: dict[str, Any] = {
     "rag_cite":          _parse_bool,
     "rag_strict":        _parse_bool,
     "rag_idk_threshold": float,
+    "file_writes":       str,
 }
 
 _PARAM_VALIDATORS: dict[str, tuple] = {
@@ -123,6 +124,13 @@ _PARAM_VALIDATORS: dict[str, tuple] = {
     "rag_idk_threshold": (
         lambda v: -1.0 <= v <= 1.0,
         "rag_idk_threshold must be between -1.0 and 1.0",
+    ),
+    # Standing authorisation for the file-writing tool (files.write_file). 'ask'
+    # (default) prompts before each write — allow once / always / cancel; 'auto'
+    # grants writes outright. Read by the tool-permission gate at startup.
+    "file_writes": (
+        lambda v: v in ("ask", "auto"),
+        "file_writes must be one of: ask, auto",
     ),
 }
 

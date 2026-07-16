@@ -292,6 +292,128 @@ class GatewayToolLoopTest(unittest.TestCase):
         self.assertEqual([m["role"] for m in first_call_messages], ["user"])
 
 
+class _WriteLoopEngine:
+    """Fake engine: emits a files.write_file call first, then a final answer."""
+
+    def complete(self, messages, params):
+        from jarvis.openrouter.client import Completion
+        if any(m.get("role") == "tool" for m in messages):
+            tool_calls, text = None, "Done."
+        else:
+            tool_calls = [{
+                "id": "w1", "type": "function",
+                "function": {"name": "files__write_file",
+                             "arguments": '{"path": "x.md", "content": "hi"}'},
+            }]
+            text = ""
+        return Completion(text=text, finish_reason="stop", request={}, response={},
+                          latency_ms=0.0, tool_calls=tool_calls)
+
+    def get_pricing(self, _):
+        return (None, None)
+
+    def get_context_window(self, _):
+        return None
+
+
+class _WriteProvider:
+    def __init__(self):
+        self.called: list[tuple[str, dict]] = []
+
+    def tool_specs(self):
+        return [{"type": "function", "function": {"name": "files__write_file",
+                 "description": "", "parameters": {"type": "object"}}}]
+
+    def call_tool(self, name, args):
+        self.called.append((name, args))
+        return "[created 'x.md']"
+
+
+class GatewayPermissionGateTest(unittest.TestCase):
+    """A mutating tool call is dispatched only when the gate allows it."""
+
+    def _run(self, gate):
+        from jarvis.llm.gateway import LLMGateway
+        provider = _WriteProvider()
+        gw = LLMGateway(_WriteLoopEngine(), tool_provider=provider, tool_gate=gate)
+        messages = [{"role": "user", "content": "write x.md"}]
+        gw.complete(messages, {}, use_tools=True)
+        return provider, messages
+
+    def test_unauthorised_write_is_queued_not_dispatched(self):
+        from jarvis.mcp.permissions import ToolPermissions
+        gate = ToolPermissions()                          # ask-mode: queue for approval
+        provider, messages = self._run(gate)
+        self.assertEqual(provider.called, [])             # never reached the provider
+        self.assertEqual(len(gate.pending), 1)            # queued instead
+        tool_msg = next(m for m in messages if m["role"] == "tool")
+        self.assertIn("awaiting", tool_msg["content"].lower())
+
+    def test_authorised_write_is_dispatched(self):
+        from jarvis.mcp.permissions import ToolPermissions
+        gate = ToolPermissions(auto=True)
+        provider, _ = self._run(gate)
+        self.assertEqual(provider.called,
+                         [("files__write_file", {"path": "x.md", "content": "hi"})])
+        self.assertEqual(gate.pending, [])
+
+    def test_no_gate_dispatches_as_before(self):
+        provider, _ = self._run(None)
+        self.assertEqual(len(provider.called), 1)
+
+
+class _DryRunEngine:
+    """Fake engine: emits a dry-run write_file call, then a final answer."""
+
+    def complete(self, messages, params):
+        from jarvis.openrouter.client import Completion
+        if any(m.get("role") == "tool" for m in messages):
+            tool_calls, text = None, "Preview shown."
+        else:
+            tool_calls = [{
+                "id": "d1", "type": "function",
+                "function": {"name": "files__write_file",
+                             "arguments": '{"path": "x.md", "content": "hi", "dry_run": true}'},
+            }]
+            text = ""
+        return Completion(text=text, finish_reason="stop", request={}, response={},
+                          latency_ms=0.0, tool_calls=tool_calls)
+
+    def get_pricing(self, _):
+        return (None, None)
+
+    def get_context_window(self, _):
+        return None
+
+
+class _DryRunProvider:
+    def tool_specs(self):
+        return [{"type": "function", "function": {"name": "files__write_file",
+                 "description": "", "parameters": {"type": "object"}}}]
+
+    def call_tool(self, name, args):
+        return "[dry run — would create]\n--- a/x.md\n+++ b/x.md\n@@ -0,0 +1 @@\n+hi"
+
+
+class GatewayDryRunPreviewTest(unittest.TestCase):
+    """A dry-run write is captured for a read-only frame, not dumped to the model."""
+
+    def test_dry_run_is_captured_and_summarised(self):
+        from jarvis.llm.gateway import LLMGateway
+        from jarvis.mcp.permissions import ToolPermissions
+        gate = ToolPermissions()
+        gw = LLMGateway(_DryRunEngine(), tool_provider=_DryRunProvider(), tool_gate=gate)
+        messages = [{"role": "user", "content": "preview x.md"}]
+        gw.complete(messages, {}, use_tools=True)
+        # captured on the gate for the REPL to frame
+        self.assertEqual(len(gate.previews), 1)
+        self.assertEqual(gate.previews[0]["path"], "x.md")
+        # the model got a short summary, NOT the raw diff body
+        tool_msg = next(m for m in messages if m["role"] == "tool")
+        self.assertIn("shown to the user", tool_msg["content"])
+        self.assertNotIn("+hi", tool_msg["content"])
+
+
 class _PipelineEngine:
     """Fake engine that drives the weather-anomaly chain A→B→C.
 

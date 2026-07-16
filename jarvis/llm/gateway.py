@@ -51,12 +51,20 @@ def _compact_args(args: dict) -> str:
 class LLMGateway:
     """The one place the rest of the system calls the model through."""
 
-    def __init__(self, engine: LLMEngine, tool_provider: Any | None = None) -> None:
+    def __init__(
+        self,
+        engine: LLMEngine,
+        tool_provider: Any | None = None,
+        tool_gate: Any | None = None,
+    ) -> None:
         self._engine = engine
         # Optional MCPToolProvider. Only calls that pass use_tools=True see tools,
         # so background/utility calls (memory, invariants, personalisation) never
         # get them. None → tool support is simply off.
         self._tool_provider = tool_provider
+        # Optional ToolPermissions gate (CLI side). Consulted before a mutating tool
+        # (e.g. files.write_file) runs; None → no gating (server-side gateways).
+        self._tool_gate = tool_gate
 
     def complete(
         self,
@@ -107,6 +115,11 @@ class LLMGateway:
             self._maybe_record(api_calls, label or "completion", completion)
             if not completion.tool_calls:
                 return completion
+            # Surface the model's own "what I'm about to do" narration (the text it
+            # emits alongside a tool call) as a live note, so the chat reads like
+            # "let me read gateway.py" → the tool call. Prefixed SAY: for the REPL styler.
+            if completion.text and completion.text.strip():
+                tool_logger.info("SAY: %s", " ".join(completion.text.split()))
             # Echo the assistant's tool-call message, then append each tool result.
             messages.append({
                 "role": "assistant",
@@ -133,10 +146,31 @@ class LLMGateway:
             args = {}
         server = self._server_for(name)
         bare = name.split("__", 1)[-1]  # drop the wire-name server prefix for display
+        # Permission gate: a mutating tool (e.g. files.write_file) may need the user's
+        # OK before it runs. When it isn't pre-authorised the gate queues it for approval
+        # after the turn — not an error, so tell the model it's pending and to move on
+        # (don't repeat the call) rather than crash or loop.
+        if self._tool_gate is not None and not self._tool_gate.allow(name, args):
+            target = (args or {}).get("path", "the file")
+            tool_logger.info("[%d] %s.%s(%s) → queued for approval",
+                             order, server, bare, _compact_args(args))
+            return {"role": "tool", "tool_call_id": call.get("id", ""),
+                    "content": (f"The change to '{target}' was captured and is awaiting the "
+                                f"user's approval after this turn. Do not repeat the call; "
+                                f"continue or summarise what you've prepared.")}
         try:
             content = self._tool_provider.call_tool(name, args)
         except Exception as exc:  # noqa: BLE001 — report back to the model, don't crash the turn
             content = f"Tool '{name}' failed: {exc}"
+        # A dry-run diff preview: show it to the user in a read-only frame (captured on
+        # the gate) and hand the model only a short summary, so it doesn't re-dump the
+        # whole file as prose. The user sees the diff framed, not duplicated.
+        if (self._tool_gate is not None and hasattr(self._tool_gate, "add_preview")
+                and bare in ("write_file", "delete_file") and (args or {}).get("dry_run")
+                and isinstance(content, str) and content.startswith("[dry run")):
+            path = (args or {}).get("path", "the file")
+            self._tool_gate.add_preview(path, content)
+            content = f"[dry-run preview of '{path}' shown to the user in a frame; not written]"
         preview = " ".join(str(content).split())[:_TRACE_PREVIEW_CHARS]
         tool_logger.info("[%d] %s.%s(%s) → %s",
                          order, server, bare, _compact_args(args), preview)

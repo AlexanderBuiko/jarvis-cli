@@ -84,9 +84,17 @@ class EngineRouter:
       toggle too.
     """
 
-    def __init__(self, config: Any, tool_provider: Any | None = None) -> None:
+    def __init__(
+        self,
+        config: Any,
+        tool_provider: Any | None = None,
+        tool_gate: Any | None = None,
+    ) -> None:
         self._config = config
         self._tool_provider = tool_provider
+        # Permission gate for mutating tool calls, attached to every gateway this router
+        # hands out (so the main turn and any pinned provider both honour it).
+        self._tool_gate = tool_gate
         self._engines: dict[str, LLMEngine] = {}
         self._provider_gateways: dict[str, LLMGateway] = {}
         self._main_gateway: LLMGateway | None = None
@@ -102,7 +110,9 @@ class EngineRouter:
         """The single gateway for the main turn — wraps the live-routing engine."""
         if self._main_gateway is None:
             self._main_gateway = LLMGateway(
-                RoutingEngine(self._config, self), tool_provider=self._tool_provider
+                RoutingEngine(self._config, self),
+                tool_provider=self._tool_provider,
+                tool_gate=self._tool_gate,
             )
         return self._main_gateway
 
@@ -110,7 +120,9 @@ class EngineRouter:
         """A gateway pinned to one concrete provider (cached)."""
         if provider not in self._provider_gateways:
             self._provider_gateways[provider] = LLMGateway(
-                self.engine(provider), tool_provider=self._tool_provider
+                self.engine(provider),
+                tool_provider=self._tool_provider,
+                tool_gate=self._tool_gate,
             )
         return self._provider_gateways[provider]
 

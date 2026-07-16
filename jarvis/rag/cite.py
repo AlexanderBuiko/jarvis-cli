@@ -58,6 +58,15 @@ def strip_trailing_citations(answer: str) -> str:
     return answer[: m.start()].rstrip()
 
 
+# Inline citation markers ("[1]", "[2, 3]") with any leading space, for plain mode.
+_INLINE_CITE = re.compile(r"[ \t]*\[\d+(?:\s*,\s*\d+)*\]")
+
+
+def strip_inline_citations(text: str) -> str:
+    """Remove inline ``[n]`` / ``[n, m]`` markers from the prose (plain, non-debug mode)."""
+    return _INLINE_CITE.sub("", text)
+
+
 def pick_quote(text: str, question: str) -> str:
     """A short **verbatim** fragment of ``text`` — the sentence overlapping the
     question most, else the leading fragment. Always a substring of ``text``."""

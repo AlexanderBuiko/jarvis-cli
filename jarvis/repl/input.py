@@ -18,6 +18,8 @@ Command autocomplete (command mode only):
 
 from __future__ import annotations
 
+import shutil
+import sys
 from typing import Callable
 
 from prompt_toolkit import Application
@@ -129,6 +131,108 @@ def apply_suggestion(text: str, suggestion: str) -> str:
         if prefix_tokens:
             return " ".join(prefix_tokens) + " " + suggestion
         return suggestion
+
+
+# ── Diff preview ──────────────────────────────────────────────────────────────
+
+
+def summarize_diff(diff: str) -> tuple[list[str], int, int]:
+    """Split a unified diff into displayable body lines + (added, removed) counts.
+
+    Drops the ``--- a/…`` / ``+++ b/…`` / ``@@`` header lines so the preview shows only
+    the changed content — the useful part for a compact frame.
+    """
+    body: list[str] = []
+    added = removed = 0
+    for line in diff.splitlines():
+        if line.startswith(("--- ", "+++ ", "@@")):
+            continue
+        if line.startswith("+"):
+            added += 1
+        elif line.startswith("-"):
+            removed += 1
+        body.append(line)
+    return body, added, removed
+
+
+# ── Write-approval frame ────────────────────────────────────────────────────────
+# A bordered box around the diff, coloured by the action (create/update/delete). The
+# same rows drive both the live prompt_toolkit frame and the static block that stays in
+# the chat after a decision.
+
+_BOX_MIN_W, _BOX_MAX_W = 44, 100
+# action → (label, box symbol). Border colour comes from the style classes below.
+_ACTIONS = {"create": ("create", "+"), "update": ("update", "~"), "delete": ("delete", "-")}
+# style class → ANSI code, for the static (post-decision) reprint.
+_FRAME_ANSI = {
+    "create": "\033[32m", "update": "\033[33m", "delete": "\033[31m",
+    "w.add": "\033[32m", "w.del": "\033[31m", "w.ctx": "\033[90m",
+    "w.more": "\033[94m", "w.keys": "\033[96m",
+}
+_FRAME_STYLE = {
+    "create": "#98c379 bold", "update": "#e5c07b bold", "delete": "#e06c75 bold",
+    "w.add": "#98c379", "w.del": "#e06c75", "w.ctx": "#7f848e",
+    "w.more": "#8b9dc3 italic", "w.keys": "#8b9dc3 bold",
+}
+
+
+def _box_width() -> int:
+    return max(_BOX_MIN_W, min(_BOX_MAX_W, shutil.get_terminal_size((80, 24)).columns))
+
+
+def _fit(text: str, width: int) -> str:
+    """Truncate (with …) or right-pad ``text`` to exactly ``width`` columns."""
+    if width <= 0:
+        return ""
+    if len(text) > width:
+        return text[: width - 1] + "…" if width > 1 else text[:width]
+    return text.ljust(width)
+
+
+def frame_rows(
+    path: str, action: str, body: list[str], added: int, removed: int,
+    expanded: bool, window: int, footer: tuple[str, str],
+) -> list[list[tuple[str, str]]]:
+    """Build the bordered box as rows of ``(style_class, text)`` segments.
+
+    ``footer`` is the (class, text) shown on the last inner row — the key hints while
+    live, or the decision once decided. Border/title use the action's colour class;
+    content lines are coloured by +/-.
+    """
+    label, sym = _ACTIONS.get(action, _ACTIONS["update"])
+    width = _box_width()
+    cw = width - 4  # "│ " + content + " │"
+    shown = body if expanded else body[:window]
+    hidden = 0 if expanded else max(0, len(body) - window)
+
+    rows: list[list[tuple[str, str]]] = []
+    top_text = f"─ {sym} {label}: {path}  (+{added} −{removed}) "
+    top_text = top_text[: width - 2]
+    rows.append([(action, "╭" + top_text + "─" * (width - 2 - len(top_text)) + "╮")])
+    for line in shown:
+        cls = "w.add" if line.startswith("+") else "w.del" if line.startswith("-") else "w.ctx"
+        rows.append([(action, "│ "), (cls, _fit(line, cw)), (action, " │")])
+    if hidden:
+        note = f"… {hidden} more line(s) · Ctrl+S to expand"
+        rows.append([(action, "│ "), ("w.more", _fit(note, cw)), (action, " │")])
+    elif expanded and len(body) > window:
+        rows.append([(action, "│ "), ("w.more", _fit("Ctrl+S to collapse", cw)), (action, " │")])
+    rows.append([(action, "│ "), (footer[0], _fit(footer[1], cw)), (action, " │")])
+    rows.append([(action, "╰" + "─" * (width - 2) + "╯")])
+    return rows
+
+
+def _rows_to_ansi(rows: list[list[tuple[str, str]]]) -> str:
+    """Render frame rows as a static string (ANSI-coloured only when stdout is a TTY)."""
+    colour = sys.stdout.isatty()
+    out = []
+    for row in rows:
+        line = "".join(
+            (f"{_FRAME_ANSI.get(cls, '')}{text}\033[0m" if colour else text)
+            for cls, text in row
+        )
+        out.append(line)
+    return "\n".join(out)
 
 
 # ── InputController ───────────────────────────────────────────────────────────
@@ -272,6 +376,124 @@ class InputController:
             mouse_support=False,
         )
         return app.run()
+
+    def approve_write(self, path: str, diff: str, action: str = "update",
+                      window: int = 10) -> str:
+        """Approve a pending file change from a bordered, expandable diff frame.
+
+        The frame is drawn as a box coloured by ``action`` (create / update / delete),
+        showing the first ``window`` changed lines (the rest behind a "… N more" line).
+        Ctrl+S (or ``e``) expands/collapses it — only this live frame responds to the
+        toggle; already-decided frames are frozen. Keys: Enter = apply once, ``a`` =
+        apply and allow all this session, ``s`` (or Ctrl+C) = skip. After the decision
+        the frame is **reprinted as a static block that stays in the chat**, footered
+        with the choice. Returns ``"once"`` / ``"always"`` / ``"skip"``.
+        """
+        body, added, removed = summarize_diff(diff)
+        state = {"expanded": False, "result": "skip"}
+        kb = KeyBindings()
+
+        def _finish(result: str):
+            def handler(event) -> None:
+                state["result"] = result
+                event.app.exit(result=result)
+            return handler
+
+        kb.add("enter")(_finish("once"))
+        kb.add("a")(_finish("always"))
+        kb.add("s")(_finish("skip"))
+        kb.add("c-c")(_finish("skip"))
+        kb.add("c-d")(_finish("skip"))
+
+        @kb.add("c-s")
+        @kb.add("e")
+        def _toggle(event) -> None:
+            state["expanded"] = not state["expanded"]
+            event.app.invalidate()
+
+        keys = "[Enter] apply   [a] allow all this session   [s] skip"
+
+        def render() -> FormattedText:
+            rows = frame_rows(path, action, body, added, removed,
+                              state["expanded"], window, ("w.keys", keys))
+            items: list = []
+            for row in rows:
+                for cls, text in row:
+                    items.append((f"class:{cls}", text))
+                items.append(("", "\n"))
+            return FormattedText(items)
+
+        app = Application(
+            layout=Layout(HSplit([Window(
+                content=FormattedTextControl(render),
+                dont_extend_height=True,
+                always_hide_cursor=True,
+            )])),
+            key_bindings=kb,
+            style=Style.from_dict(_FRAME_STYLE),
+            full_screen=False,
+            erase_when_done=True,  # erase the *live* frame; we reprint a static one below
+            mouse_support=False,
+        )
+        app.run()
+
+        # Persist the frame in the chat (it doesn't vanish once decided), footered with
+        # the decision instead of the key hints — in whatever expand state it was left.
+        decided = {"once": "→ applied", "always": "→ applied · allowing all this session",
+                   "skip": "→ skipped"}[state["result"]]
+        rows = frame_rows(path, action, body, added, removed,
+                          state["expanded"], window, ("w.keys", decided))
+        print(_rows_to_ansi(rows))
+        return state["result"]
+
+    def show_preview(self, path: str, diff: str, action: str = "update",
+                     window: int = 10) -> None:
+        """Show a dry-run diff in a read-only, expandable frame (nothing is written).
+
+        Same bordered box as ``approve_write`` but with no apply/skip — just **Ctrl+S**
+        (or ``e``) to expand/collapse and **Enter** to continue. The frame then stays in
+        the chat, footered "dry run — not written".
+        """
+        body, added, removed = summarize_diff(diff)
+        state = {"expanded": False}
+        kb = KeyBindings()
+
+        for key in ("enter", "c-c", "c-d", "s"):
+            kb.add(key)(lambda event: event.app.exit())
+
+        @kb.add("c-s")
+        @kb.add("e")
+        def _toggle(event) -> None:
+            state["expanded"] = not state["expanded"]
+            event.app.invalidate()
+
+        foot = "dry run — not written   ·   Ctrl+S expand   ·   [Enter] continue"
+
+        def render() -> FormattedText:
+            rows = frame_rows(path, action, body, added, removed,
+                              state["expanded"], window, ("w.more", foot))
+            items: list = []
+            for row in rows:
+                for cls, text in row:
+                    items.append((f"class:{cls}", text))
+                items.append(("", "\n"))
+            return FormattedText(items)
+
+        app = Application(
+            layout=Layout(HSplit([Window(
+                content=FormattedTextControl(render),
+                dont_extend_height=True, always_hide_cursor=True,
+            )])),
+            key_bindings=kb,
+            style=Style.from_dict(_FRAME_STYLE),
+            full_screen=False,
+            erase_when_done=True,
+            mouse_support=False,
+        )
+        app.run()
+        rows = frame_rows(path, action, body, added, removed,
+                          state["expanded"], window, ("w.more", "→ dry run (not written)"))
+        print(_rows_to_ansi(rows))
 
     def read_text(self, label: str) -> str:
         """Prompt for a single free-text line (e.g. 'What's the problem?'). Returns the text."""
