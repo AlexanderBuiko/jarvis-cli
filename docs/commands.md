@@ -40,6 +40,18 @@ surface as dispatched in `jarvis/repl/loop.py`.
 MCP tools are offered to the model automatically on every chat answer and task
 stage; `mcp` is for inspecting/calling them by hand.
 
+The bundled local **`files`** server lets the assistant read, search across many
+files, and create / modify / delete project files under `JARVIS_FILES_ROOT` (default:
+cwd) — give it a goal ("find every use of X", "write an ADR", "delete the stale notes file")
+and its tool loop does the file work itself. Every write is journaled, so you can undo it
+in the same session — ask the assistant to "revert that", or call
+`mcp call files.revert_last` / `files.revert_file path=…` (see `files.list_changes`).
+Creating/modifying a file is gated by the `file_writes` config toggle:
+
+- `config set file_writes ask` (default) — after the turn, each proposed write is shown
+  as a diff and you choose apply once / apply and allow all this session / skip.
+- `config set file_writes auto` — apply writes immediately and return the diff.
+
 ## Document indexing (RAG substrate)
 
 - `index build <path> [k=v …]` — load → chunk → embed → store an index.

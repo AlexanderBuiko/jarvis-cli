@@ -195,7 +195,7 @@ Parameters
                             local sentence-transformers model (pip install sentence-transformers).
   rag_rewrite        bool   Rewrite the question into a better search query before retrieving (one
                             extra LLM call, default off).
-  rag_cite           bool   Append mandatory Sources + verbatim Quotes to grounded answers (default on).
+  rag_cite           bool   Debug view: append Sources + verbatim Quotes to grounded answers (default OFF; plain prose otherwise).
   rag_strict         bool   Closed-domain mode (default off). When on, weak/irrelevant context →
                             "I don't know" + ask to clarify. When off (augmented), weak context just
                             answers normally, so off-topic chat isn't hijacked.

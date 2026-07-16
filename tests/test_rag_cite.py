@@ -189,9 +189,19 @@ class AgentGroundedTest(unittest.TestCase):
         self.assertIn("I don't know", reply)
         self.assertEqual(engine.calls, [])  # deterministic gate, no LLM call
 
-    def test_chat_strong_appends_citations(self):
-        engine = FakeEngine(scripted=["The answer is to raise HTTPException."])
+    def test_chat_is_plain_by_default(self):
+        # Citations are a debug view — off by default: clean prose, no Sources/Quotes.
+        engine = FakeEngine(scripted=["The answer is to raise HTTPException [1]."])
         agent = self._agent(engine, rag="on")
+        reply = agent.chat("how do I return a 404 error")
+        self.assertNotIn("Sources:", reply)
+        self.assertNotIn("Quotes:", reply)
+        self.assertNotIn("[1]", reply)                 # inline marker stripped too
+        self.assertTrue(engine.calls)
+
+    def test_chat_debug_appends_citations(self):
+        engine = FakeEngine(scripted=["The answer is to raise HTTPException."])
+        agent = self._agent(engine, rag="on", rag_cite="on")
         reply = agent.chat("how do I return a 404 error")
         self.assertIn("Sources:", reply)
         self.assertIn("Quotes:", reply)

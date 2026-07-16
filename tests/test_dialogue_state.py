@@ -124,6 +124,7 @@ class MiniChatScenarioTest(unittest.TestCase):
         cfg.set("context_strategy", "dialogue_state")
         cfg.set("rag", "on")
         cfg.set("rag_index", "kb")
+        cfg.set("rag_cite", "on")   # debug view: assert Sources persist across turns
         agent = JarvisAgent(engine, cfg)
 
         replies = [agent.chat(msg) for msg in SCENARIOS[key]]

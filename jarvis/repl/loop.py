@@ -81,7 +81,7 @@ def _active_provider_model(config_manager: ConfigManager) -> tuple[str, str]:
     return provider, model
 
 
-def run_repl(agent: JarvisAgent, config_manager: ConfigManager) -> None:
+def run_repl(agent: JarvisAgent, config_manager: ConfigManager, tool_gate=None) -> None:
     print(_banner())
 
     # First run: no profile yet → offer the onboarding interview (skippable).
@@ -140,11 +140,19 @@ def run_repl(agent: JarvisAgent, config_manager: ConfigManager) -> None:
                 # An active task owns prompt input: this message drives its pipeline.
                 output = _drive_task(agent, controller, initial_pending=f"The user says: {raw}")
             else:
+                _drain_live_notes()  # discard any stale notes (e.g. from a task run)
                 try:
-                    reply, _ = _run_with_spinner(lambda: agent.chat(raw))
-                    output = _tool_trace_block() + f"A: {reply}"
+                    (answer, _notices), _ = _run_with_spinner(
+                        lambda: agent.chat_detailed(raw), note_fn=_live_notes
+                    )
+                    output = _format_answer(answer)
                 except Exception as exc:
                     output = f"Error: {exc}"
+                # The turn may have produced dry-run previews (show them read-only) and
+                # queued real writes for approval; handle both now, on the main thread
+                # with the spinner stopped (the worker that ran the turn can't prompt).
+                _show_previews(tool_gate, controller)
+                _process_pending_writes(tool_gate, agent.tool_provider, controller)
 
         if output:
             print(output)
@@ -159,6 +167,16 @@ _MAX_DRIVE_TURNS = 80
 # ANSI colours for the live step table, by status glyph.
 _STEP_ANSI = {"✓": "\033[32m", "▶": "\033[33m", "○": "\033[90m"}
 _ANSI_RESET = "\033[0m"
+
+# Colours for the per-turn trace / answer split. Suppressed when stdout isn't a TTY
+# (piped/redirected) so raw escape codes don't leak into captured output.
+_COLOR = sys.stdout.isatty()
+_DIM = "\033[90m" if _COLOR else ""       # generic notice / trace: dim grey
+_ANSWER = "\033[36;1m" if _COLOR else ""  # answer label: bold cyan
+_TOOL = "\033[36m" if _COLOR else ""      # mcp tool-call note: cyan
+_RAG = "\033[35m" if _COLOR else ""       # rag-request note: magenta
+_SAY = "\033[37m" if _COLOR else ""       # model's intent narration: soft white
+_RESET = "\033[0m" if _COLOR else ""
 
 
 class _LiveRegion:
@@ -180,6 +198,65 @@ class _LiveRegion:
     def finalize(self) -> None:
         """Leave the current content on screen and stop tracking it."""
         self._lines = 0
+
+
+def _parse_dry_run(content: str) -> tuple[str, str]:
+    """Split a dry-run tool result into (action, diff): the "[dry run — would …]" banner
+    names the action; the rest is the diff."""
+    banner, _, rest = content.partition("\n")
+    if banner.startswith("[dry run"):
+        action = ("create" if "create" in banner else "delete" if "delete" in banner
+                  else "update")
+        return action, rest
+    return "update", content
+
+
+def _show_previews(tool_gate, controller: InputController) -> None:
+    """Render the turn's dry-run diffs as read-only frames (nothing is written)."""
+    if tool_gate is None or not hasattr(tool_gate, "take_previews"):
+        return
+    for item in tool_gate.take_previews():
+        action, diff = _parse_dry_run(item["content"])
+        controller.show_preview(item["path"], diff, action=action)
+
+
+def _process_pending_writes(tool_gate, provider, controller: InputController) -> None:
+    """Approve/apply the writes the last turn queued (main thread, spinner stopped).
+
+    For each pending write: show the diff (a dry-run peek at the same tool), then ask
+    apply-once / apply-and-allow-all / skip via the standard select menu. Applying calls
+    the tool directly (past the gate, since the user just approved it); the journal makes
+    it revertible. 'Allow all' grants the tool for the rest of the session.
+    """
+    if tool_gate is None or provider is None:
+        return
+    for item in tool_gate.take_pending():
+        tool, args = item["tool"], item["args"]
+        path = args.get("path", "the file")
+        # Peek at the diff without writing, then let the user approve it from a compact,
+        # expandable frame (not a full-file dump). Strip the "[dry run …]" banner.
+        try:
+            preview = provider.call_tool(tool, {**args, "dry_run": True})
+        except Exception as exc:  # noqa: BLE001 — preview is best-effort
+            preview = f"(could not preview: {exc})"
+        # The dry-run banner names the action ("would create/update/delete"); use it to
+        # colour/label the frame. Strip the banner line before showing the diff.
+        action, diff = _parse_dry_run(preview)
+        decision = controller.approve_write(path, diff, action=action)
+        if decision == "always":
+            tool_gate.grant_always(tool)
+        if decision in ("once", "always"):
+            apply_args = {k: v for k, v in args.items() if k != "dry_run"}
+            try:
+                result = provider.call_tool(tool, apply_args)
+                # One-line confirmation — the frame already showed the change; don't
+                # re-dump the whole file.
+                head = result.splitlines()[0] if result else f"[wrote {path}]"
+                print(f"{_TOOL}✓ {head}{_RESET}  ·  revert: files.revert_file path={path}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"Error applying change to {path}: {exc}")
+        else:
+            print(f"{_DIM}✗ skipped {path} — nothing was written{_RESET}")
 
 
 def _color_step_line(line: str) -> str:
@@ -599,20 +676,34 @@ def _locked_param_error(sub: str, args: list[str], agent: JarvisAgent) -> str | 
     return None
 
 
-def _tool_trace_block() -> str:
-    """Render this turn's tool calls as a tidy block above the answer (or "").
+def _style_note(line: str) -> str:
+    """Style one activity line by its source: the model's intent narration (``SAY:`` →
+    💬), an MCP tool call (starts with ``[n]`` → 🔧 cyan), or anything else, i.e. a RAG
+    request (📚 magenta)."""
+    if line.startswith("SAY: "):
+        return f"  {_SAY}💬 {line[5:]}{_RESET}"
+    if line.lstrip().startswith("["):
+        return f"  {_TOOL}🔧 {line}{_RESET}"
+    return f"  {_RAG}📚 {line}{_RESET}"
 
-    Reads the lines the gateway logged via jarvis.tools (buffered by
-    repl.tool_trace), so the user sees which tools ran, on which server, and in
-    what order — without the raw per-request log noise.
-    """
+
+def _live_notes() -> list[str]:
+    """Drain new activity lines (logged by the gateway/agent via jarvis.tools) and style
+    them — printed in the moment, above the spinner, as tools/RAG are triggered."""
     from .tool_trace import drain
+    return [_style_note(ln) for ln in drain()]
 
-    lines = drain()
-    if not lines:
-        return ""
-    body = "\n".join(f"  ↪ {line}" for line in lines)
-    return f"Tools used ({len(lines)}):\n{body}\n\n"
+
+def _drain_live_notes() -> None:
+    """Discard buffered notes without printing (clears stale lines before a new turn)."""
+    from .tool_trace import drain
+    drain()
+
+
+def _format_answer(answer: str) -> str:
+    """The final answer under a distinct bold-cyan label, so it stands out from the
+    dim trace above it."""
+    return f"{_ANSWER}Answer{_RESET}\n{answer}"
 
 
 # Spinner frames for the in-progress animation (Braille spinner).
@@ -622,14 +713,18 @@ _SPINNER_DELAY_S = 0.25
 
 
 def _run_with_spinner(
-    fn: Callable[[], str], status_fn: Callable[[], str] | None = None
+    fn: Callable[[], str],
+    status_fn: Callable[[], str] | None = None,
+    note_fn: Callable[[], list[str]] | None = None,
 ) -> tuple[object, bool]:
     """Run fn() on a worker thread while animating an elapsed-time spinner.
 
     Returns (value, interrupted). On Ctrl+C the current step is allowed to finish
     (so its state is saved cleanly) and interrupted=True is returned, letting the
     caller stop before the next step. status_fn supplies a live suffix re-read on
-    every frame. fn's exception, if any, is re-raised.
+    every frame. note_fn (when given) returns new lines to print *above* the spinner as
+    they occur — used to surface tool/RAG notes in the moment. fn's exception, if any,
+    is re-raised.
     """
     box: dict = {}
 
@@ -646,8 +741,19 @@ def _run_with_spinner(
     start = time.perf_counter()
     drawing = False
     interrupted = False
+
+    def _flush_notes() -> None:
+        # Print any new notes on their own lines above the spinner (clear the spinner
+        # line first so it doesn't merge with the note).
+        if note_fn is None:
+            return
+        for note in note_fn():
+            sys.stdout.write(f"\r\033[K{note}\n")
+            sys.stdout.flush()
+
     while worker.is_alive():
         try:
+            _flush_notes()
             elapsed = time.perf_counter() - start
             if elapsed >= _SPINNER_DELAY_S:
                 drawing = True
@@ -668,6 +774,7 @@ def _run_with_spinner(
         # Erase the spinner line so it doesn't linger above the output.
         sys.stdout.write("\r\033[K")
         sys.stdout.flush()
+    _flush_notes()  # any notes that landed on the final tick
 
     if "error" in box:
         raise box["error"]

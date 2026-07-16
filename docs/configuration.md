@@ -42,7 +42,9 @@ environment, then `./.env`, then `~/.jarvis/.env`).
 - `rag_top_n` (int) — chunks kept after filter/rerank (top-N).
 - `rag_rerank` — `off` | `cross_encoder` (local sentence-transformers reorder).
 - `rag_rewrite` (bool) — rewrite the question into a better search query first.
-- `rag_cite` (bool, default on) — append mandatory Sources + verbatim Quotes.
+- `rag_cite` (bool, default **off**) — debug view: append the Sources + verbatim
+  Quotes for the chunks used. Off by default (clean prose, inline `[n]` stripped);
+  `config set rag_cite on` turns the citation block on.
 - `rag_strict` (bool, default off) — closed-domain mode: weak/irrelevant context →
   "I don't know" instead of answering from general knowledge.
 - `rag_idk_threshold` (float, default 0) — confidence bar below which context is "weak".
