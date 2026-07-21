@@ -1,0 +1,17 @@
+ D CLAUDE.md
+ M jarvis/repl/commands.py
+ M jarvis/repl/input.py
+ M jarvis/repl/loop.py
+?? 03-memory-state-notes-english-copy.md
+?? 06-local-llm-notes.txt
+?? 06-local-llm-summary.md
+?? 07_7_week_english_copy.txt
+?? 07_7_week_summary_english_copy.txt
+?? 08-local-optimization.md
+?? "2026_06_29_RAG_\320\255\320\274\320\261\320\265\320\264\320\264\320\270\320\275\320\263\320\270,_\320\262\320\265\320\272\321\202\320\276\321\200\320\275\321\213\320\271_\320\277\320\276\320\270\321\201\320\272_\320\270_\321\207\320\260\320\275\320\272\320\270\320\275\320\263.md"
+?? 3rd_week.txt
+?? 8week1thread-transcription.txt
+?? jarvis/session/note_store.py
+?? project_context.md
+?? quiz_pool_android.json
+?? tests/test_note_store.py
