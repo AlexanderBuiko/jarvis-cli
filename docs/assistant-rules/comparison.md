@@ -22,9 +22,9 @@ dispatch chain, the help text and `COMMAND_TREE`.
 
 **The `COMMAND_TREE` prediction failed in all three runs.** `rubric.md` called it
 the near-certain miss, on the evidence that commit `dd34a78` shipped `support`
-with exactly that defect and that `support`, `quiz` and `files` are all still
+with exactly that defect and that `support` and `quiz` are both still
 absent from it. Every run registered it correctly — including `gen0`, with no
-project rules at all. A touchpoint a human missed three times is, in fact,
+project rules at all. A touchpoint a human missed twice is, in fact,
 discoverable by reading the surrounding code.
 
 ## Where the runs actually differ
@@ -140,7 +140,7 @@ nothing and cost context on every unrelated turn. It now lives in
 
 Honest caveat: since all three runs registered correctly without it, the skill's
 value is **unproven**. The argument for keeping it is that it costs nothing when
-not loaded, and that this repository's own history contains three commits that
+not loaded, and that this repository's own history contains two commits that
 made exactly that mistake.
 
 ## Threats to validity

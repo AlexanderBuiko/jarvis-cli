@@ -135,11 +135,11 @@ every turn.
 
 `rubric.md` predicted the assistant would forget to register the command in
 `COMMAND_TREE` (the autocomplete table). The evidence was strong: commit
-`dd34a78` shipped the `support` command with exactly that defect, and `support`,
-`quiz` and `files` are all still missing from it today.
+`dd34a78` shipped the `support` command with exactly that defect, and `support` and
+`quiz` are both still missing from it today.
 
 **All three runs registered it correctly, including the run with no rules.** A
-touchpoint a human missed three times turned out to be discoverable by reading the
+touchpoint a human missed twice turned out to be discoverable by reading the
 adjacent code.
 
 ### Every suspected violation was a defect in the rules

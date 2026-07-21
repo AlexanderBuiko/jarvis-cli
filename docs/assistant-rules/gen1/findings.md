@@ -49,8 +49,8 @@ throughout; handlers returning strings with no `print()` in the library module.
 `rubric.md` predicted criterion 7 (`COMMAND_TREE` autocomplete) would fail. It
 passed — registered correctly and aligned with the surrounding dict. The
 reasoning behind the prediction was that commit `dd34a78` shipped `support` with
-exactly this defect and that `support`, `quiz` and `files` are still missing from
-it. A human author with full repo context missed it three times; the assistant,
+exactly this defect and that `support` and `quiz` are both still missing from
+it. A human author with full repo context missed it twice; the assistant,
 given the rules, did not.
 
 ## Caveat that limits what this proves
