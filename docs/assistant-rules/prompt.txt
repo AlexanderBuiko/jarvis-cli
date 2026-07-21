@@ -1,0 +1,2 @@
+Add a `notes` command to the Jarvis REPL. It should support `notes add <text>`,
+`notes list`, and `notes delete <id>`. Notes persist across sessions.
