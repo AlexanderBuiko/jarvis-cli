@@ -1,0 +1,106 @@
+diff --git a/jarvis/repl/commands.py b/jarvis/repl/commands.py
+index 28502b5..ad923d2 100644
+--- a/jarvis/repl/commands.py
++++ b/jarvis/repl/commands.py
+@@ -17,6 +17,7 @@ from ..session.store import (
+     _render_request_cost_chart,
+     _render_cumulative_cost_chart,
+ )
++from ..session.note_store import NoteStore
+ from ..indexing import IndexPipeline, IndexStore, make_embedder
+ from ..indexing.chunking import DEFAULT_OVERLAP, DEFAULT_SIZE
+ 
+@@ -129,6 +130,13 @@ Commands
+   invariants                    Show the global invariants (hard rules)
+   invariants init               Scaffold invariants.md from a template
+ 
++  notes add <text>              Save a note
++  notes list                    List saved notes with their ids
++  notes delete <id>             Delete a note by id
++
++  Notes are plain reminders kept in ~/.jarvis/notes.json. They persist across
++  sessions and are never sent to the model.
++
+   profile                       Show the system-managed user profile
+   profile onboard               Run (or re-run) the onboarding interview
+ 
+@@ -816,6 +824,34 @@ def handle_invariants_init(agent: JarvisAgent) -> str:
+     return f"Scaffolded invariants.md. Edit it directly:\n  {path}"
+ 
+ 
++# ── Notes (free-text reminders) ──────────────────────────────────────────────
++
++
++def handle_notes_add(args: list[str], store: NoteStore | None = None) -> str:
++    text = " ".join(args).strip()
++    if not text:
++        return "Usage: notes add <text>"
++    note = (store or NoteStore()).add(text)
++    return f"Saved note {note['id']}."
++
++
++def handle_notes_list(store: NoteStore | None = None) -> str:
++    notes = (store or NoteStore()).list_all()
++    if not notes:
++        return "No notes yet. Use 'notes add <text>' to save one."
++    lines = [f"  {n['id']}  {n['created_at'][:10]}  {n['text']}" for n in notes]
++    return f"Notes ({len(notes)})\n" + "\n".join(lines)
++
++
++def handle_notes_delete(args: list[str], store: NoteStore | None = None) -> str:
++    if not args:
++        return "Usage: notes delete <id>"
++    note_id = args[0]
++    if not (store or NoteStore()).delete(note_id):
++        return f"No note matches '{note_id}'. Use 'notes list' to see the ids."
++    return f"Deleted note {note_id}."
++
++
+ # ── Profile (system-managed) ──────────────────────────────────────────────────
+ 
+ 
+diff --git a/jarvis/repl/input.py b/jarvis/repl/input.py
+index 5b27b13..24bd4ac 100644
+--- a/jarvis/repl/input.py
++++ b/jarvis/repl/input.py
+@@ -46,6 +46,7 @@ COMMAND_TREE: dict[str, dict] = {
+     "config":  {"show": {}, "set": {}, "update": {}, "reset": {}},
+     "task":    {"new": {}, "list": {}, "show": {}, "start": {}, "run": {}, "exit": {}, "delete": {}, "attach": {}, "detach": {}},
+     "invariants": {"show": {}, "init": {}},
++    "notes":   {"add": {}, "list": {}, "delete": {}},
+     "profile": {"show": {}, "onboard": {}},
+     "mcp":     {"list": {}, "call": {}},
+     "index":   {"build": {}, "list": {}, "show": {}, "search": {}, "compare": {}, "delete": {}},
+diff --git a/jarvis/repl/loop.py b/jarvis/repl/loop.py
+index 9656fb8..644cd35 100644
+--- a/jarvis/repl/loop.py
++++ b/jarvis/repl/loop.py
+@@ -45,6 +45,9 @@ from .commands import (
+     handle_task_detach,
+     handle_invariants_show,
+     handle_invariants_init,
++    handle_notes_add,
++    handle_notes_list,
++    handle_notes_delete,
+     handle_profile_show,
+     handle_profile_onboard,
+     handle_personalize,
+@@ -602,6 +605,18 @@ def _dispatch(
+             return handle_invariants_init(agent)
+         return "Usage: invariants | invariants init"
+ 
++    if cmd == "notes":
++        if not args:
++            return handle_notes_list()
++        sub = args[0].lower()
++        if sub == "add":
++            return handle_notes_add(args[1:])
++        if sub == "list":
++            return handle_notes_list()
++        if sub == "delete":
++            return handle_notes_delete(args[1:])
++        return "Usage: notes add <text> | notes list | notes delete <id>"
++
+     if cmd == "profile":
+         if not args:
+             return handle_profile_show(agent)
