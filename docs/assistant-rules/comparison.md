@@ -39,6 +39,34 @@ discoverable by reading the surrounding code.
 | Module docstring naming the rejected alternative | ✓ | ✓ | ✓ | No signal — all three |
 | Layering, tests, dispatch, help, autocomplete, `except` tuples | ✓ | ✓ | ✓ | No signal — all three |
 
+## Second correction: gen2 was right and the rule was wrong
+
+The section below was itself written on a wrong premise. It treats gen2's use of
+raw dicts as non-compliance. A later audit of all 25 dataclasses in the codebase
+shows the opposite.
+
+The dataclasses split cleanly by persistence. Every one of them is an *in-memory*
+carrier — `StageVerdict`, `StageResult`, `EvalReport`, `Completion`, `Chunk`,
+`ReviewOpinion`. Every *persisted* record is a plain dict: `TaskStore.load() ->
+dict | None`, `ThreadStore.list_all() -> list[dict]`, `task: dict` throughout
+`pipeline/`. No dataclass in `session/` survives a restart.
+
+`NoteStore` persists to `~/.jarvis/notes.json`. **gen0 and gen2 matched the local
+dialect; gen1 is the run that diverged from it.**
+
+The v1/v2 rule said only "data carriers are `@dataclass`" without distinguishing
+the two cases, and it contradicted global invariant 7 ("follow the local dialect;
+the conventions of the file you are editing beat any general best practice").
+gen1 resolved that contradiction toward the project rule, gen0 and gen2 toward
+the global one. No run disobeyed. The rules disagreed with each other.
+
+This is the failure the source lecture names directly: the rule files are
+concatenated into one system prompt, so they must not contradict. The apparent
+"unreliable rule" was an authoring defect presenting as model non-determinism.
+
+Corrected in v3 (`project-CLAUDE.v3.md`): persisted records are dicts, in-memory
+carriers are dataclasses, stated explicitly.
+
 ## A correction to the earlier conclusion
 
 After `gen0` this document claimed the dataclass difference was "the substantive
