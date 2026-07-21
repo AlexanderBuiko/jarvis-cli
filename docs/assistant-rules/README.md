@@ -66,16 +66,21 @@ Generation 1 scored 9/9, so a same-prompt rerun under corrected rules cannot sho
 a difference — there is nothing left to fix. The interesting question becomes
 *what did the rules contribute at all*, and that is measured by removing them.
 
+`CLAUDE.md` is committed and clean, so `git stash` has nothing to take — the file
+has to be moved out of the working tree instead:
+
 ```bash
-git stash push -- CLAUDE.md      # project rules out of the way
+mv CLAUDE.md /tmp/CLAUDE.md.ablation
 ```
 
-Run the identical prompt in a fresh session, capture as `gen0`, then restore:
+Confirm it is gone (`git status` shows it deleted), then run the identical prompt
+in a fresh session. Capture and restore:
 
 ```bash
 python scripts/capture_generation.py gen0
 git checkout -- . && git clean -fd jarvis/ tests/
-git stash pop
+git checkout -- CLAUDE.md        # rules back
+git status --short               # docs/assistant-rules/ only
 ```
 
 `gen0` runs with the **global** rules still active (they live in `~/.claude/`),
