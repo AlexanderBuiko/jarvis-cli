@@ -66,6 +66,38 @@ you work on task-state code, use these exact stage names — never invent
 `research`, `implement`, `report`. Transitions go through
 `TaskStore.advance_stage`, never by assigning `task.stage` directly.
 
+## Subagents and skills
+
+The global rules say the main agent routes and delegates. In this project the
+subagents mirror the application's own pipeline roles one-to-one, so the process
+you follow and the process Jarvis runs use the same vocabulary.
+
+| Agent | Mirrors | Tools |
+|---|---|---|
+| `planner` | `PlannerAgent` ([stages.py:137](jarvis/pipeline/stages.py:137)) | read-only |
+| `executor` | `ExecutorAgent` ([stages.py:189](jarvis/pipeline/stages.py:189)) | read + write |
+| `validator` | `ValidatorAgent` ([stages.py:261](jarvis/pipeline/stages.py:261)) | read-only **by design** |
+| `reviewer` | the swarm panel ([swarm.py](jarvis/pipeline/swarm.py)) | read-only |
+| `consolidator` | the swarm consolidator | read-only |
+
+Two properties are deliberate and must survive any edit to these agents:
+
+- **`validator` has no edit tools.** A validator that repairs its own findings
+  cannot be trusted to report them.
+- **`reviewer` instances never see each other.** Run several in parallel with
+  different perspectives, then pass every opinion to `consolidator` — which is the
+  only one that knows the goal. This is the shape in `swarm.py`, followed exactly.
+
+Skills carry the **procedural** knowledge — the step-by-step recipes — while this
+file carries the **conventions**. That split is on purpose: a recipe is needed
+only when you are performing that specific task, so it is loaded on demand instead
+of occupying the system prompt on every turn.
+
+| Skill | Use when |
+|---|---|
+| `add-repl-command` | adding a CLI command, sub-command or interactive verb |
+| `add-mcp-server` | adding an MCP server, or a tool to an existing one |
+
 ## Naming
 
 | Kind | Rule | Examples |

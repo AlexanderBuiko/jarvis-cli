@@ -32,3 +32,6 @@ servers.json
 # macOS
 .DS_Store
 3rd week.txt
+
+# Personal Claude Code approvals (the agents/ and skills/ are shared)
+.claude/settings.local.json
