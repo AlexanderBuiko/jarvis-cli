@@ -1,0 +1,226 @@
+diff --git a/CLAUDE.md b/CLAUDE.md
+index bbc8e2a..318e60c 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -98,8 +98,9 @@ every `__init__`.
+ **Data carriers** are `@dataclass`, or `NamedTuple` when immutable. Field
+ documentation goes in a trailing `#` comment on the field, not in the docstring.
+ 
+-**`from __future__ import annotations`** goes in every *new* module. Do not
+-retrofit it into older modules as a drive-by change.
++**`from __future__ import annotations`** goes in every *new* module under
++`jarvis/`. Do not retrofit it into older modules as a drive-by change, and do
++not add it to tests — only 1 of 37 test modules uses it.
+ 
+ **Config resolution order** is always `explicit argument → env var → hardcoded
+ default`, resolved in the constructor:
+@@ -379,8 +380,15 @@ def _normalise(raw: str) -> str:
+     return raw.strip().lower()
+ ```
+ 
+-**Package `__init__.py`** — docstring, flat relative re-exports, explicit
+-`__all__` mirroring import order (not alphabetical):
++**Package `__init__.py`** — **not universal; follow the package you are in.**
++`llm/`, `mcp/`, `indexing/`, `rag/`, `review/` re-export their public surface.
++`session/` deliberately does not — it holds 7 modules and exports 2, because the
++stores are imported directly by their callers. `pipeline/` has no `__all__` at
++all. Adding a new module to a package that does not re-export is **not** a
++missing registration; leave its `__init__.py` alone.
++
++Where a package does re-export, the shape is: docstring, flat relative imports,
++explicit `__all__` mirroring import order (not alphabetical):
+ 
+ ```python
+ """jarvis.thing — one-line purpose."""
+diff --git a/jarvis/repl/commands.py b/jarvis/repl/commands.py
+index 28502b5..5137949 100644
+--- a/jarvis/repl/commands.py
++++ b/jarvis/repl/commands.py
+@@ -17,6 +17,7 @@ from ..session.store import (
+     _render_request_cost_chart,
+     _render_cumulative_cost_chart,
+ )
++from ..session.notes_store import NotesStore
+ from ..indexing import IndexPipeline, IndexStore, make_embedder
+ from ..indexing.chunking import DEFAULT_OVERLAP, DEFAULT_SIZE
+ 
+@@ -132,6 +133,13 @@ Commands
+   profile                       Show the system-managed user profile
+   profile onboard               Run (or re-run) the onboarding interview
+ 
++  notes add <text>              Save a note (persists across sessions)
++  notes list                    List saved notes with their ids
++  notes delete <id>             Delete a note by id (a unique prefix works)
++
++  Notes are your own scratch memory, stored in ~/.jarvis/notes.json. They are
++  never injected into a prompt and never read by the agent.
++
+   invariants.md is the single, app-wide hard-rule file. Scaffold it with
+   'invariants init', then edit ~/.jarvis/memory/invariants.md directly.
+   It is injected into every prompt AND enforced in code: when a request conflicts
+@@ -816,6 +824,35 @@ def handle_invariants_init(agent: JarvisAgent) -> str:
+     return f"Scaffolded invariants.md. Edit it directly:\n  {path}"
+ 
+ 
++# ── Notes (free-form user scratch memory) ─────────────────────────────────────
++
++
++def handle_notes_add(args: list[str], store: NotesStore | None = None) -> str:
++    text = " ".join(args).strip()
++    if not text:
++        return "Usage: notes add <text>"
++    note = (store or NotesStore()).add(text)
++    return f"Added note {note.id}."
++
++
++def handle_notes_list(store: NotesStore | None = None) -> str:
++    notes = (store or NotesStore()).list_all()
++    if not notes:
++        return "No notes yet. Use 'notes add <text>' to create one."
++    lines = [f"  {n.id}  {n.created_at[:10]}  {n.text}" for n in notes]
++    return f"Notes ({len(notes)})\n" + "\n".join(lines)
++
++
++def handle_notes_delete(args: list[str], store: NotesStore | None = None) -> str:
++    if not args:
++        return "Usage: notes delete <id>"
++    note_id = args[0]
++    deleted = (store or NotesStore()).delete(note_id)
++    if deleted is None:
++        return f"No single note matches '{note_id}'. Use 'notes list' to see ids."
++    return f"Deleted note {deleted.id}."
++
++
+ # ── Profile (system-managed) ──────────────────────────────────────────────────
+ 
+ 
+diff --git a/jarvis/repl/input.py b/jarvis/repl/input.py
+index 5b27b13..08c5fde 100644
+--- a/jarvis/repl/input.py
++++ b/jarvis/repl/input.py
+@@ -47,6 +47,7 @@ COMMAND_TREE: dict[str, dict] = {
+     "task":    {"new": {}, "list": {}, "show": {}, "start": {}, "run": {}, "exit": {}, "delete": {}, "attach": {}, "detach": {}},
+     "invariants": {"show": {}, "init": {}},
+     "profile": {"show": {}, "onboard": {}},
++    "notes":   {"add": {}, "list": {}, "delete": {}},
+     "mcp":     {"list": {}, "call": {}},
+     "index":   {"build": {}, "list": {}, "show": {}, "search": {}, "compare": {}, "delete": {}},
+     "rag":     {"ask": {}, "eval": {}},
+diff --git a/jarvis/repl/loop.py b/jarvis/repl/loop.py
+index 9656fb8..644cd35 100644
+--- a/jarvis/repl/loop.py
++++ b/jarvis/repl/loop.py
+@@ -45,6 +45,9 @@ from .commands import (
+     handle_task_detach,
+     handle_invariants_show,
+     handle_invariants_init,
++    handle_notes_add,
++    handle_notes_list,
++    handle_notes_delete,
+     handle_profile_show,
+     handle_profile_onboard,
+     handle_personalize,
+@@ -602,6 +605,18 @@ def _dispatch(
+             return handle_invariants_init(agent)
+         return "Usage: invariants | invariants init"
+ 
++    if cmd == "notes":
++        if not args:
++            return handle_notes_list()
++        sub = args[0].lower()
++        if sub == "add":
++            return handle_notes_add(args[1:])
++        if sub == "list":
++            return handle_notes_list()
++        if sub == "delete":
++            return handle_notes_delete(args[1:])
++        return "Usage: notes add <text> | notes list | notes delete <id>"
++
+     if cmd == "profile":
+         if not args:
+             return handle_profile_show(agent)
+diff --git a/scripts/capture_generation.py b/scripts/capture_generation.py
+index 642bb64..09b729d 100644
+--- a/scripts/capture_generation.py
++++ b/scripts/capture_generation.py
+@@ -59,16 +59,21 @@ def _touches(path: Path, token: str) -> bool:
+         return False
+ 
+ 
+-def _new_files(status: str) -> list[str]:
+-    """Source paths git reports as added/untracked, ignoring repo-root noise.
++def _changed_files(status: str, codes: frozenset[str]) -> list[str]:
++    """Source paths git reports under ``codes``, ignoring repo-root noise.
+ 
+     Scoped to ``jarvis/`` and ``tests/`` on purpose: the repo root carries a pile
+     of untracked course notes that would otherwise count as work the generation
+     produced.
++
++    Callers must distinguish *created* from *modified*. Conventions that apply to
++    a new file (``from __future__ import annotations``) must not be asserted
++    against a pre-existing one the generation merely edited — the rules forbid
++    retrofitting them, so scoring a modification as a miss inverts the rule.
+     """
+     out = []
+     for line in status.splitlines():
+-        if len(line) > 3 and line[:2].strip() in {"A", "??", "AM", "M"}:
++        if len(line) > 3 and line[:2].strip() in codes:
+             path = line[3:].strip().strip('"')
+             if path.startswith(("jarvis/", "tests/")):
+                 out.append(path)
+@@ -108,12 +113,27 @@ def main() -> int:
+     cmd = args.command
+ 
+     # ── Raw evidence ──────────────────────────────────────────────────────────
++    _, status = _run(["git", "status", "--porcelain"])
++    (out / "files.txt").write_text(status, encoding="utf-8")
++
+     _, diff = _run(["git", "diff"])
+     _, staged = _run(["git", "diff", "--cached"])
+     (out / "changes.diff").write_text(diff + staged, encoding="utf-8")
+ 
+-    _, status = _run(["git", "status", "--porcelain"])
+-    (out / "files.txt").write_text(status, encoding="utf-8")
++    # `git diff` reports tracked modifications only, so a generation's *new*
++    # modules — usually the substance of the work — would be absent from the
++    # captured diff entirely. They are inlined into one markdown document rather
++    # than copied as files: a copied `tests/test_*.py` sitting under docs/ gets
++    # collected by pytest a second time, which corrupts the test count of every
++    # later run.
++    doc = [f"# {args.label} — files created by this generation", ""]
++    for rel in _changed_files(status, frozenset({"??", "A", "AM"})):
++        src = ROOT / rel
++        if not src.is_file() or not rel.endswith(".py"):
++            continue
++        doc += [f"## `{rel}`", "", "```python",
++                src.read_text(encoding="utf-8").rstrip(), "```", ""]
++    (out / "new_files.md").write_text("\n".join(doc), encoding="utf-8")
+ 
+     import_rc, import_out = _run([PYTHON, "-c", "import jarvis.repl.loop"])
+     (out / "import.txt").write_text(f"exit={import_rc}\n{import_out}", encoding="utf-8")
+@@ -126,11 +146,13 @@ def main() -> int:
+ 
+     # ── Criteria ──────────────────────────────────────────────────────────────
+     ruff_errors = _ruff_error_count(ruff_out)
+-    created = _new_files(status)
+-    new_py = [p for p in created if p.endswith(".py")]
++    created = _changed_files(status, frozenset({"A", "??", "AM"}))
++    # Only files the generation *created* under jarvis/ carry the future-import
++    # rule; tests are exempt (1 of 37 existing test modules uses it).
++    new_py = [p for p in created if p.endswith(".py") and p.startswith("jarvis/")]
+     new_tests = [p for p in created if p.startswith("tests/test_")]
+     new_libs = [
+-        p for p in new_py if p.startswith("jarvis/") and "/repl/" not in p
++        p for p in new_py if "/repl/" not in p
+     ]
+ 
+     checks: list[tuple[str, bool, str]] = [
+@@ -150,7 +172,7 @@ def main() -> int:
+          f"new library modules: {', '.join(new_libs) or 'none'}"),
+         ("9 future import", bool(new_py) and all(
+             _touches(ROOT / p, "from __future__ import annotations") for p in new_py),
+-         f"new modules: {', '.join(new_py) or 'none'}"),
++         f"new jarvis/ modules: {', '.join(new_py) or 'none'}"),
+     ]
+ 
+     passed = sum(1 for _, ok, _ in checks if ok)

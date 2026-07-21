@@ -59,16 +59,21 @@ def _touches(path: Path, token: str) -> bool:
         return False
 
 
-def _new_files(status: str) -> list[str]:
-    """Source paths git reports as added/untracked, ignoring repo-root noise.
+def _changed_files(status: str, codes: frozenset[str]) -> list[str]:
+    """Source paths git reports under ``codes``, ignoring repo-root noise.
 
     Scoped to ``jarvis/`` and ``tests/`` on purpose: the repo root carries a pile
     of untracked course notes that would otherwise count as work the generation
     produced.
+
+    Callers must distinguish *created* from *modified*. Conventions that apply to
+    a new file (``from __future__ import annotations``) must not be asserted
+    against a pre-existing one the generation merely edited — the rules forbid
+    retrofitting them, so scoring a modification as a miss inverts the rule.
     """
     out = []
     for line in status.splitlines():
-        if len(line) > 3 and line[:2].strip() in {"A", "??", "AM", "M"}:
+        if len(line) > 3 and line[:2].strip() in codes:
             path = line[3:].strip().strip('"')
             if path.startswith(("jarvis/", "tests/")):
                 out.append(path)
@@ -108,12 +113,27 @@ def main() -> int:
     cmd = args.command
 
     # ── Raw evidence ──────────────────────────────────────────────────────────
+    _, status = _run(["git", "status", "--porcelain"])
+    (out / "files.txt").write_text(status, encoding="utf-8")
+
     _, diff = _run(["git", "diff"])
     _, staged = _run(["git", "diff", "--cached"])
     (out / "changes.diff").write_text(diff + staged, encoding="utf-8")
 
-    _, status = _run(["git", "status", "--porcelain"])
-    (out / "files.txt").write_text(status, encoding="utf-8")
+    # `git diff` reports tracked modifications only, so a generation's *new*
+    # modules — usually the substance of the work — would be absent from the
+    # captured diff entirely. They are inlined into one markdown document rather
+    # than copied as files: a copied `tests/test_*.py` sitting under docs/ gets
+    # collected by pytest a second time, which corrupts the test count of every
+    # later run.
+    doc = [f"# {args.label} — files created by this generation", ""]
+    for rel in _changed_files(status, frozenset({"??", "A", "AM"})):
+        src = ROOT / rel
+        if not src.is_file() or not rel.endswith(".py"):
+            continue
+        doc += [f"## `{rel}`", "", "```python",
+                src.read_text(encoding="utf-8").rstrip(), "```", ""]
+    (out / "new_files.md").write_text("\n".join(doc), encoding="utf-8")
 
     import_rc, import_out = _run([PYTHON, "-c", "import jarvis.repl.loop"])
     (out / "import.txt").write_text(f"exit={import_rc}\n{import_out}", encoding="utf-8")
@@ -126,11 +146,13 @@ def main() -> int:
 
     # ── Criteria ──────────────────────────────────────────────────────────────
     ruff_errors = _ruff_error_count(ruff_out)
-    created = _new_files(status)
-    new_py = [p for p in created if p.endswith(".py")]
+    created = _changed_files(status, frozenset({"A", "??", "AM"}))
+    # Only files the generation *created* under jarvis/ carry the future-import
+    # rule; tests are exempt (1 of 37 existing test modules uses it).
+    new_py = [p for p in created if p.endswith(".py") and p.startswith("jarvis/")]
     new_tests = [p for p in created if p.startswith("tests/test_")]
     new_libs = [
-        p for p in new_py if p.startswith("jarvis/") and "/repl/" not in p
+        p for p in new_py if "/repl/" not in p
     ]
 
     checks: list[tuple[str, bool, str]] = [
@@ -150,7 +172,7 @@ def main() -> int:
          f"new library modules: {', '.join(new_libs) or 'none'}"),
         ("9 future import", bool(new_py) and all(
             _touches(ROOT / p, "from __future__ import annotations") for p in new_py),
-         f"new modules: {', '.join(new_py) or 'none'}"),
+         f"new jarvis/ modules: {', '.join(new_py) or 'none'}"),
     ]
 
     passed = sum(1 for _, ok, _ in checks if ok)

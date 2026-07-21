@@ -1,0 +1,57 @@
+E731 Do not assign a `lambda` expression, use a `def`
+  --> jarvis/__main__.py:44:5
+   |
+42 |     from .mcp.permissions import ToolPermissions
+43 |
+44 |     live_auto = lambda: config_manager.runtime.get("file_writes") == "auto"
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+45 |     return ToolPermissions(auto=live_auto)
+   |
+help: Rewrite `live_auto` as a `def`
+
+E731 Do not assign a `lambda` expression, use a `def`
+   --> jarvis/rag/evaluation.py:216:5
+    |
+214 | def format_report(report: EvalReport) -> str:
+215 |     sep = "─" * 78
+216 |     pct = lambda x: f"{round(x * 100)}%"
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+217 |     lines = [
+218 |         f"RAG control-question evaluation   (index '{report.index_name}', k={report.k}, "
+    |
+help: Rewrite `pct` as a `def`
+
+E731 Do not assign a `lambda` expression, use a `def`
+   --> jarvis/rag/evaluation.py:223:5
+    |
+221 |         f"  {'──':>2}  {'───':>3}  {'───────────':>11}  {'───':>5}  {'───':>3}  {'───':>3}  {'───':>3}  ────────",
+222 |     ]
+223 |     mark = lambda b: "✓" if b else "·"
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+224 |     for i, r in enumerate(report.results, 1):
+225 |         hit = "✓" if r.retrieval_hit else "✗"
+    |
+help: Rewrite `mark` as a `def`
+
+F401 [*] `..pipeline.fsm.STAGES` imported but unused
+  --> jarvis/session/task_store.py:41:28
+   |
+39 | # the single source of truth. Re-exported here for backward compatibility with
+40 | # callers/tests that import these names from the store.
+41 | from ..pipeline.fsm import STAGES, ALLOWED_TRANSITIONS, resolve_transition
+   |                            ^^^^^^
+   |
+help: Remove unused import
+
+F401 [*] `..pipeline.fsm.ALLOWED_TRANSITIONS` imported but unused
+  --> jarvis/session/task_store.py:41:36
+   |
+39 | # the single source of truth. Re-exported here for backward compatibility with
+40 | # callers/tests that import these names from the store.
+41 | from ..pipeline.fsm import STAGES, ALLOWED_TRANSITIONS, resolve_transition
+   |                                    ^^^^^^^^^^^^^^^^^^^
+   |
+help: Remove unused import
+
+Found 5 errors.
+[*] 2 fixable with the `--fix` option (3 hidden fixes can be enabled with the `--unsafe-fixes` option).

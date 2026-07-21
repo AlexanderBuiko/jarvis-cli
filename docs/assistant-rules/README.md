@@ -60,6 +60,32 @@ git status --short          # docs/assistant-rules/ only
 
 **6. Commit the artifacts**, then move to the next rule version.
 
+## The ablation run (`gen0`)
+
+Generation 1 scored 9/9, so a same-prompt rerun under corrected rules cannot show
+a difference — there is nothing left to fix. The interesting question becomes
+*what did the rules contribute at all*, and that is measured by removing them.
+
+```bash
+git stash push -- CLAUDE.md      # project rules out of the way
+```
+
+Run the identical prompt in a fresh session, capture as `gen0`, then restore:
+
+```bash
+python scripts/capture_generation.py gen0
+git checkout -- . && git clean -fd jarvis/ tests/
+git stash pop
+```
+
+`gen0` runs with the **global** rules still active (they live in `~/.claude/`),
+so the comparison isolates the contribution of the *project* file specifically.
+That is the right unit — the global file is not what this week's task produced.
+
+Expected signal, in descending order of likely impact: the `Store` suffix and
+`~/.jarvis/` JSON persistence choice, the return-a-string layering rule, the
+`COMMAND_TREE` registration, and the docstring-explains-why style.
+
 ## Comparing
 
 Generation 2 must start from the same `rules-v1` tree with only `CLAUDE.md`
