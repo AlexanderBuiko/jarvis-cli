@@ -1,107 +1,125 @@
 # What the project rules actually changed
 
 Three runs of one prompt, verbatim, each in a fresh session from the same tree.
+The global rules (`~/.claude/CLAUDE.md`) were active in all three, so everything
+below measures the marginal contribution of the **project** file only.
 
-| Run | Rules active | Automated score |
+| Run | Project rules | Automated score |
 |---|---|---|
-| `gen0` | global only (project `CLAUDE.md` removed) | 8/9 |
-| `gen1` | global + project v1 | 9/9 |
-| `gen2` | not run — see "Why there is no gen2" | — |
+| `gen0` | none — `CLAUDE.md` removed (the ablation) | 8/9 |
+| `gen1` | v1 | 9/9 |
+| `gen2` | v2 | 9/9 |
 
-The automated rubric separates the runs by a single criterion. It is the wrong
-instrument for this question, and the interesting result is entirely in the code.
+**Ablation** = remove one component, rerun the identical test, and attribute the
+difference to what you removed.
 
-## The automated delta is nearly flat
+## The automated rubric is nearly blind here
 
-Both runs passed criteria 1–8: imports clean, no new lint errors, tests green, a
-test file shipped, dispatch wired, help text written, `COMMAND_TREE` registered,
-no `print()` in the library module. Only `from __future__ import annotations`
-separated them.
+Across three runs the 9 criteria separate them by a single point, and that point
+is the mechanical `from __future__ import annotations` check. Every run compiled,
+kept the lint baseline at 5, shipped tests, and registered the command in the
+dispatch chain, the help text and `COMMAND_TREE`.
 
-**The prediction failed twice.** `COMMAND_TREE` was called the near-certain miss
-in `rubric.md`, on the evidence that commit `dd34a78` shipped `support` with
-exactly that defect and that `support`, `quiz` and `files` are still absent from
-it. It was registered correctly by gen1 *and* by gen0 — with no project rules at
-all. The touchpoint a human missed three times is, in fact, discoverable by
-reading the surrounding code.
+**The `COMMAND_TREE` prediction failed in all three runs.** `rubric.md` called it
+the near-certain miss, on the evidence that commit `dd34a78` shipped `support`
+with exactly that defect and that `support`, `quiz` and `files` are all still
+absent from it. Every run registered it correctly — including `gen0`, with no
+project rules at all. A touchpoint a human missed three times is, in fact,
+discoverable by reading the surrounding code.
 
-## The qualitative delta is large
+## Where the runs actually differ
 
-| Aspect | `gen0` — no project rules | `gen1` — v1 rules |
-|---|---|---|
-| **Data carrier** | raw `dict` throughout; `note["text"]`, `note.get("created_at")` | `@dataclass Note` with a trailing `#` comment documenting the field |
-| **Constructor param** | `path: Path \| None = None` | `directory: Path \| None = None` — identical to `task_store`, `thread_store`, `invariant_store` |
-| **Constants** | inline `"notes.json"`, bare `[:8]` | `_FILENAME`, `_ID_LENGTH`, the latter with a comment explaining the width |
-| **Class docstring** | none | one-line summary naming the storage location |
-| **`__future__` import** | absent | present |
-| Module docstring | explains single-file vs file-per-note | explains single-file vs `TaskStore`'s file-per-record |
-| Layering, tests, dispatch, help, autocomplete, section separators, narrow `except` tuples | correct | correct |
+| Convention | `gen0` no rules | `gen1` v1 | `gen2` v2 | Reliable? |
+|---|---|---|---|---|
+| `@dataclass` over raw `dict` | ✗ | ✓ | **✗** | **No — 1 of 2 rule-runs** |
+| `from __future__ import annotations` | ✗ | ✓ | ✓ | Yes |
+| `_FILENAME` named constant | ✗ | ✓ | ✓ | Yes |
+| `directory:` param, matching the sibling stores | ✗ | ✓ | ✓ | Yes |
+| Class docstring | ✗ | ✓ | ✓ | Yes |
+| Module docstring naming the rejected alternative | ✓ | ✓ | ✓ | No signal — all three |
+| Layering, tests, dispatch, help, autocomplete, `except` tuples | ✓ | ✓ | ✓ | No signal — all three |
 
-The dict-vs-dataclass split is the substantive one. It propagates: gen0's store
-returns `dict` from `add`, `list_all`, `find` and `delete`, so every caller
-indexes by string key and the type checker has nothing to hold. `CLAUDE.md`'s
-"data carriers are `@dataclass`, or `NamedTuple` when immutable" is what bought
-that, and no amount of reading neighbouring files would have supplied it —
-`session/` contains both styles.
+## A correction to the earlier conclusion
 
-One mild over-imitation in gen0: `sep = "─" * 60` in the list renderer, borrowed
-from the `/help` and `/support` clients where it separates a remote answer. Local
-command output in this codebase does not use it. Given no rules, the model picked
-a plausible sibling and copied the wrong one.
+After `gen0` this document claimed the dataclass difference was "the substantive
+one" and identified it as the single biggest thing the rules bought.
+
+**`gen2` falsifies that.** The data-carrier rule is *identical* in v1 and v2 — it
+was never edited. `gen2` had it in context and used raw dicts anyway, exactly as
+the no-rules run did. Two of three runs produced dicts, one of them while being
+explicitly told not to.
+
+So the `gen0`/`gen1` gap on that dimension was at least partly chance. The
+threat to validity recorded in the previous version of this file — *n = 1 per
+condition* — materialised, and it struck the finding that was leading the
+document. The third run was worth doing precisely because it was expected to be a
+no-op.
 
 ## What most affected the quality
 
-Ranked by observed effect, not by how much was written about them.
+Ranked by **reliability across runs**, which is a stronger basis than a single
+comparison.
 
-1. **Data-carrier rule** (`@dataclass` over `dict`) — the only difference that
-   changes the shape of the API and every call site.
-2. **Naming conventions table** — produced `directory:` over `path:`, matching
-   the three sibling stores.
-3. **"Explain any constant that is not self-evident"** — turned two magic values
-   into named, documented constants.
-4. **`from __future__ import annotations`** — mechanical, and the only one the
-   automated rubric caught.
-5. **Docstring rules** — small delta; the codebase already teaches this well by
-   example.
+1. **Naming conventions table** — `directory:` over `path:`, matching
+   `task_store`, `thread_store`, `invariant_store`. Delivered in both rule-runs.
+2. **"Explain any constant that is not self-evident"** — magic values became named
+   constants in both rule-runs.
+3. **`from __future__ import annotations`** — mechanical, reliable, and the only
+   one the rubric detects.
+4. **Docstring rules** — a class docstring appeared in both rule-runs and in
+   neither ablation run.
+5. **Data-carrier rule (`@dataclass`)** — **obeyed half the time.** Highest impact
+   when followed, lowest reliability of anything measured.
 
 What the project rules did **not** need to supply, because the codebase or the
 global rules already carried it: registration touchpoints (dispatch, help text,
-`COMMAND_TREE`), the return-a-string layering discipline, shipping a test,
-narrow exception tuples degrading to a neutral value, section separators, and
-the "docstring explains why, not what" habit.
+`COMMAND_TREE`), return-a-string layering, shipping a test, narrow exception
+tuples degrading to a neutral value, section separators, and the "docstring
+explains why" habit — `gen0` wrote a genuinely good module docstring with no
+project rules at all.
 
-That is the useful lesson, and it inverts the effort spent writing the rules: the
-registration checklists that seemed most valuable were redundant, and the
-type-discipline rules that read as boilerplate did the real work.
+## The lesson
 
-## Why there is no gen2
+**Writing a rule does not make it stick.** `gen2` scored a perfect 9/9 while
+violating the convention this document had called the most important one. The two
+facts are compatible because the rubric tests registration and mechanics, not data
+modelling — the automated score was blind to the regression.
 
-gen1 scored 9/9 with no genuine convention violation on manual review
-(`gen1/findings.md`). With nothing to fix, a rerun under corrected rules could
-not produce a measurable difference, and adding rules to manufacture one is the
-"put everything in there" failure the source lecture warns against. v2 exists and
-is two corrections with zero additions — both of them cases where v1 asserted a
-convention the codebase does not actually hold:
+Two practical consequences:
 
-- `from __future__ import annotations` scoped to `jarvis/` and away from tests
-  (1 of 37 test modules uses it).
-- `__init__.py` re-export downgraded from universal to per-package (`session/`
-  exports 2 of 7 modules; `pipeline/` has no `__all__` at all).
+- Short, mechanical rules (add this import, name this constant) are followed
+  reliably. Rules requiring a modelling *decision* (use a dataclass, not a dict)
+  are followed inconsistently, and need either repetition, a worked example at the
+  point of use, or enforcement outside the prompt.
+- A rubric that a change can pass while regressing is an incomplete rubric. This
+  one measures whether the feature is wired up, not whether it is well built.
 
-Both corrections came from gen1 being *right* where the rules were wrong.
+## Why the registration recipes became skills, not rules
+
+`CLAUDE.md` is loaded on every turn; a skill loads only when its description
+matches the task. The ablation showed the registration steps were discoverable
+without rules, so keeping the six-step recipe in the always-loaded file bought
+nothing and cost context on every unrelated turn. It now lives in
+`.claude/skills/add-repl-command/`.
+
+Honest caveat: since all three runs registered correctly without it, the skill's
+value is **unproven**. The argument for keeping it is that it costs nothing when
+not loaded, and that this repository's own history contains three commits that
+made exactly that mistake.
 
 ## Threats to validity
 
+- **n = 1 per condition, and it already bit.** One threat in this list has
+  already turned into a wrong conclusion. Treat every single-run difference below
+  the level of "appeared in both rule-runs" as unproven.
 - **Task selection bias.** `notes` is structurally a sibling of the `support`
   command, whose recipe was traced in detail while writing the rules. The rules
-  documented the conventions this task needed. A task in less-studied territory
-  (a new MCP server, a third LLM provider) would likely widen the gen0/gen1 gap.
-- **n = 1 per condition.** Both runs are single samples of a stochastic process.
-  The dict-vs-dataclass difference is large and structural enough to be unlikely
-  as noise; the docstring differences are not.
-- **The global rules were active in both runs**, so everything above measures the
-  *project* file's marginal contribution only — which is the right unit for this
-  task, but means the total contribution of rules is understated.
-- **The instrument had three defects**, all found after gen1 ran and all fixed
-  before gen0 (`gen1/findings.md`). gen1's captured score was re-derived with the
-  corrected script, so both runs were scored by the same instrument.
+  documented the conventions this task needed. Unstudied territory — a new MCP
+  server, a third LLM provider — would likely widen the gap.
+- **Global rules active throughout**, so the total contribution of rules is
+  understated; only the project file's marginal effect is measured.
+- **The instrument had three defects**, all found after `gen1` and fixed before
+  `gen0` and `gen2`. `gen1` was re-scored with the corrected script, so all three
+  runs were measured by the same instrument.
+- **The rubric cannot see data modelling.** The one regression found in `gen2` was
+  invisible to it and surfaced only on manual review.
