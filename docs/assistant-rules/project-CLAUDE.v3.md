@@ -1,6 +1,6 @@
 # jarvis-cli — Project Rules
 
-**v1** — specialises `~/.claude/CLAUDE.md`. Only what is specific to this
+**v3** — specialises `~/.claude/CLAUDE.md`. Only what is specific to this
 repository lives here; the global file still applies in full.
 
 ---
@@ -147,7 +147,7 @@ dataclass: it adds a serialisation layer the rest of the codebase does not have.
 
 **`from __future__ import annotations`** goes in every *new* module under
 `jarvis/`. Do not retrofit it into older modules as a drive-by change, and do
-not add it to tests — only 1 of 37 test modules uses it.
+not add it to tests — only 1 of 36 test modules uses it.
 
 **Config resolution order** is always `explicit argument → env var → hardcoded
 default`, resolved in the constructor:
@@ -429,7 +429,7 @@ def _normalise(raw: str) -> str:
 
 **Package `__init__.py`** — **not universal; follow the package you are in.**
 `llm/`, `mcp/`, `indexing/`, `rag/`, `review/` re-export their public surface.
-`session/` deliberately does not — it holds 7 modules and exports 2, because the
+`session/` deliberately does not — it holds 6 modules and exports 2, because the
 stores are imported directly by their callers. `pipeline/` has no `__all__` at
 all. Adding a new module to a package that does not re-export is **not** a
 missing registration; leave its `__init__.py` alone.

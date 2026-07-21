@@ -30,10 +30,10 @@ codebase, and each turned out to be the rules being wrong, not the code.
 
 | Suspected miss | Verdict |
 |---|---|
-| Test file lacks `from __future__ import annotations` | **Rule wrong.** 1 of 37 existing test modules uses it. Generation followed local dialect. |
-| `NotesStore` not re-exported in `session/__init__.py` | **Rule wrong.** `session/` holds 7 modules and exports 2; `pipeline/` has no `__all__` at all. Adding one would have been the defect. |
+| Test file lacks `from __future__ import annotations` | **Rule wrong.** 1 of 36 existing test modules uses it. Generation followed local dialect. |
+| `NotesStore` not re-exported in `session/__init__.py` | **Rule wrong.** `session/` holds 6 modules and exports 2; `pipeline/` has no `__all__` at all. Adding one would have been the defect. |
 | Command handlers lack docstrings | **Matches dialect.** 9 of 38 existing handlers have them. |
-| `_write` is not atomic (no temp+rename) | **Matches dialect.** All 7 existing stores use a plain `write_text`. |
+| `_write` is not atomic (no temp+rename) | **Matches dialect.** Every persisting module in `session/` uses a plain `write_text` — 7 call sites across 5 modules, none atomic. |
 | `__init__(self, directory: Path \| None = None) -> None` | Byte-identical to `task_store`, `thread_store`, `invariant_store`. |
 
 Conventions the generation picked up unprompted, none of which the prompt

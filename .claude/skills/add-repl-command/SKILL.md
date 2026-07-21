@@ -97,7 +97,7 @@ Add a `<Thing>Store` in `jarvis/session/`, following `task_store.py` /
 - Reads degrade to a neutral value on a narrow exception tuple:
   `except (json.JSONDecodeError, OSError): return []`
 - **Do not add it to `jarvis/session/__init__.py`.** That package exports 2 of its
-  7 modules on purpose; the stores are imported directly by their callers.
+  6 modules on purpose; the stores are imported directly by their callers.
 
 ## Verify
 
