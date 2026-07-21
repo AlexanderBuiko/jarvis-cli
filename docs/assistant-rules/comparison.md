@@ -31,7 +31,7 @@ discoverable by reading the surrounding code.
 
 | Convention | `gen0` no rules | `gen1` v1 | `gen2` v2 | Reliable? |
 |---|---|---|---|---|
-| `@dataclass` over raw `dict` | ✗ | ✓ | **✗** | **No — 1 of 2 rule-runs** |
+| `@dataclass` for a *persisted* record | ✗ | ✓ | ✗ | **Not a defect — see the correction below; gen1 is the outlier** |
 | `from __future__ import annotations` | ✗ | ✓ | ✓ | Yes |
 | `_FILENAME` named constant | ✗ | ✓ | ✓ | Yes |
 | `directory:` param, matching the sibling stores | ✗ | ✓ | ✓ | Yes |
@@ -96,8 +96,10 @@ comparison.
    one the rubric detects.
 4. **Docstring rules** — a class docstring appeared in both rule-runs and in
    neither ablation run.
-5. **Data-carrier rule (`@dataclass`)** — **obeyed half the time.** Highest impact
-   when followed, lowest reliability of anything measured.
+5. **Data-carrier rule (`@dataclass`)** — **withdrawn as a finding.** It looked
+   like the highest-impact and least reliable rule. It was neither: it was
+   ambiguous, it contradicted global invariant 7, and the run that "obeyed" it is
+   the run that diverged from the codebase. Fixed in v3.
 
 What the project rules did **not** need to supply, because the codebase or the
 global rules already carried it: registration touchpoints (dispatch, help text,
@@ -108,19 +110,25 @@ project rules at all.
 
 ## The lesson
 
-**Writing a rule does not make it stick.** `gen2` scored a perfect 9/9 while
-violating the convention this document had called the most important one. The two
-facts are compatible because the rubric tests registration and mechanics, not data
-modelling — the automated score was blind to the regression.
+**An ambiguous rule looks exactly like an unreliable model.** The dataclass
+finding survived two rewrites of this document before an audit of the codebase
+showed the rule itself was the defect. From the outside, "the model ignores this
+rule half the time" and "the rule contradicts another rule" produce identical
+evidence. Only reading the codebase separates them.
 
-Two practical consequences:
+Three practical consequences:
 
-- Short, mechanical rules (add this import, name this constant) are followed
-  reliably. Rules requiring a modelling *decision* (use a dataclass, not a dict)
-  are followed inconsistently, and need either repetition, a worked example at the
-  point of use, or enforcement outside the prompt.
-- A rubric that a change can pass while regressing is an incomplete rubric. This
-  one measures whether the feature is wired up, not whether it is well built.
+- **Check the rule against the code before blaming the output.** Every single
+  suspected violation across three runs — the test-file `__future__` import, the
+  missing `__all__` re-export, the dataclass — turned out to be the rule
+  overstating a convention the codebase does not hold. Three for three.
+- **Rules must be specific enough not to collide.** "Data carriers are
+  `@dataclass`" reads as precise but does not say *which* carriers, so it
+  silently contradicted "follow the local dialect". Both were mine.
+- **This rubric measures wiring, not design.** All three runs scored 8–9/9 while
+  differing on data modelling, parameter naming and constant extraction. A score
+  that cannot distinguish them is not measuring quality, and the manual review
+  did the real work throughout.
 
 ## Why the registration recipes became skills, not rules
 
