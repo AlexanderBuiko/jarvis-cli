@@ -47,7 +47,8 @@ jarvis/__main__.py        entry point — wires router, gateways, agent, REPL
     ├── session/          stores: thread, task, profile, invariant
     ├── config/           ConfigManager (runtime params), env_file loader
     ├── review/           standalone `python -m jarvis.review` CI entry point
-    └── smoke/            Level-2 UI smoke: pty-drives the real REPL, platform-agnostic
+    ├── smoke/            Level-2 UI smoke: pty-drives the real REPL, platform-agnostic
+    └── web/              minimal browser UI (`python -m jarvis.web`) over the same _dispatch
 ```
 
 **Two test levels.** Level 1 is code — `pytest` over business logic, faked at the

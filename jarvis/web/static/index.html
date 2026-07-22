@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jarvis — Web</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.4rem; }
+    section { border: 1px solid #8884; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+    h2 { font-size: 1rem; margin: 0 0 .6rem; }
+    label { display: inline-block; min-width: 4.5rem; }
+    input { padding: .35rem .5rem; margin: .2rem .3rem .2rem 0; }
+    button { padding: .4rem .8rem; margin: .2rem .3rem .2rem 0; cursor: pointer; }
+    #output { background: #8881; border-radius: 6px; padding: .8rem; min-height: 3rem;
+              white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: .85rem; }
+  </style>
+</head>
+<body>
+  <h1>Jarvis — Web UI</h1>
+  <p>A thin web front-end over the same Jarvis logic the CLI runs. Command mode only.</p>
+
+  <section>
+    <h2>Configuration</h2>
+    <div>
+      <label for="cfg-key">Key</label>
+      <input id="cfg-key" data-testid="cfg-key" placeholder="temperature">
+      <label for="cfg-value">Value</label>
+      <input id="cfg-value" data-testid="cfg-value" placeholder="0.7">
+      <button id="cfg-set" data-testid="cfg-set">Set</button>
+      <button id="cfg-show" data-testid="cfg-show">Show config</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Tasks</h2>
+    <div>
+      <label for="task-name">Name</label>
+      <input id="task-name" data-testid="task-name" placeholder="my-task">
+      <button id="task-create" data-testid="task-create">Create task</button>
+      <button id="task-list" data-testid="task-list">List tasks</button>
+    </div>
+    <div>
+      <label for="task-id">Id</label>
+      <input id="task-id" data-testid="task-id" placeholder="a1b2c3d4">
+      <button id="task-delete" data-testid="task-delete">Delete task</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Result</h2>
+    <pre id="output" data-testid="output">(no command run yet)</pre>
+  </section>
+
+  <script>
+    async function run(command) {
+      const out = document.getElementById("output");
+      try {
+        const resp = await fetch("/api/command", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ command }),
+        });
+        const data = await resp.json();
+        out.textContent = data.output || "(no output)";
+      } catch (err) {
+        out.textContent = "request failed: " + err;
+      }
+    }
+    const val = (id) => document.getElementById(id).value.trim();
+
+    document.getElementById("cfg-set").onclick = () =>
+      run(`config set ${val("cfg-key")} ${val("cfg-value")}`);
+    document.getElementById("cfg-show").onclick = () => run("config show");
+    document.getElementById("task-create").onclick = () => run(`task new ${val("task-name")}`);
+    document.getElementById("task-list").onclick = () => run("task list");
+    document.getElementById("task-delete").onclick = () => run(`task delete ${val("task-id")}`);
+  </script>
+</body>
+</html>
