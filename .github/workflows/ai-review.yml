@@ -33,8 +33,20 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install the reviewer
-        run: pip install -e .
+      - name: Install the package and test tools
+        run: pip install -e . pytest
+
+      - name: QA gate — Level-1 code tests + Level-2 UI smoke
+        # One report from both levels. Blocking: a broken test or smoke step
+        # should stop the merge, unlike the advisory AI review below.
+        run: python scripts/qa_report.py --report qa-report.txt
+
+      - name: Upload the QA report
+        if: always()   # keep the report even when the gate fails
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-report
+          path: qa-report.txt
 
       - name: Review the PR
         # Advisory: don't fail the whole check if the brain is unavailable.

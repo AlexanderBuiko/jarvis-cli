@@ -46,8 +46,17 @@ jarvis/__main__.py        entry point — wires router, gateways, agent, REPL
     ├── rag/              retrieval-augmented generation, eval, rerank
     ├── session/          stores: thread, task, profile, invariant
     ├── config/           ConfigManager (runtime params), env_file loader
-    └── review/           standalone `python -m jarvis.review` CI entry point
+    ├── review/           standalone `python -m jarvis.review` CI entry point
+    └── smoke/            Level-2 UI smoke: pty-drives the real REPL, platform-agnostic
 ```
+
+**Two test levels.** Level 1 is code — `pytest` over business logic, faked at the
+`LLMEngine` seam, no network. Level 2 is UI smoke — `python -m jarvis.smoke`
+launches the real `jarvis` in a pty and drives it like a user, capturing each
+step's terminal output as a "screenshot". `python scripts/qa_report.py` runs both
+and emits one report (the CI gate in `ai-review.yml`). The smoke runner talks to a
+`SmokeAdapter` Protocol so a web/mobile adapter plugs in later; only the CLI
+adapter has a real target today (the terminal is jarvis's only UI).
 
 **Layering rule.** `repl/` may import anything. Library packages must not import
 `repl/`. Library packages must not print.
@@ -114,6 +123,7 @@ of occupying the system prompt on every turn.
 |---|---|
 | `add-repl-command` | adding a CLI command, sub-command or interactive verb |
 | `add-mcp-server` | adding an MCP server, or a tool to an existing one |
+| `update-smoke` | after a feature lands, refresh smoke scenarios and rerun the QA gate |
 
 ## Naming
 
