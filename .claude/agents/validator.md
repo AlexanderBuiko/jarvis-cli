@@ -25,9 +25,10 @@ that you inferred the scope.
 .venv/bin/python -c "import jarvis.repl.loop"
 ```
 
-**Lint baseline: 5 pre-existing `F401` errors on `jarvis/`.** More than 5 means
-the change introduced new ones. Report the count against the baseline, not the
-raw number.
+**Lint baseline: 5 pre-existing errors on `jarvis/`** — 2× `F401` (`task_store.py`)
+and 3× `E731` (`__main__.py`, `rag/evaluation.py`). More than 5, or a new error
+type, means the change introduced one. Report the count against the baseline, not
+the raw number.
 
 Run `.venv/bin/ruff check <new files>` separately when you want a clean signal on
 what the change itself added.

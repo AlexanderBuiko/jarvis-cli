@@ -102,6 +102,6 @@ Add a `<Thing>Store` in `jarvis/session/`, following `task_store.py` /
 ## Verify
 
 ```bash
-.venv/bin/ruff check jarvis/          # baseline is 5 pre-existing errors
+.venv/bin/ruff check jarvis/          # baseline is 5 pre-existing errors (2 F401 + 3 E731)
 .venv/bin/python -m pytest -q
 ```

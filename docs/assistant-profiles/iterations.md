@@ -45,7 +45,25 @@ So the final shape is three layers: **selector → profile → subagents.**
 
 ## Iteration on the profile bodies (after the test runs)
 
-To be filled in once each profile is exercised on its task. Record here, per
-profile: what the first run got wrong, and the single change to the profile file
-that fixed it. Success target is one run, working result — the same standard as
-Day 1.
+**No profile body needed changing.** All three ran once, the selector picked the
+right profile unprompted, and each returned a working result on the first launch.
+Full run notes in [`results.md`](results.md).
+
+That is the honest Day-2 outcome: the finalisation happened *before* the runs (the
+subagent → profile restructure above), not after. Forcing a v2 of a profile that
+already worked would be the "put everything in there" mistake the lecture warns
+about.
+
+What the runs changed was not the profiles but the **material they audit** — which
+is exactly what a working profile should produce:
+
+| Run | Real defect it surfaced | Fix |
+|---|---|---|
+| Bug Fix | the documented lint baseline "5 F401" is really 2× F401 + 3× E731 | corrected in `CLAUDE.md`, `validator`, both skills |
+| Convention Audit | antipattern 5 wording is over-broad — a self-validating parser (`_parse_bool`, which raises) needs no validator | refined antipattern 5 in `CLAUDE.md` |
+| Research | (none — clean answer, interpretation difference only) | — |
+
+Both defects were mine, both were verified against the code before acting, and
+both are the same failure mode as the rest of the week: a plausible-looking claim
+in the rules that only checking against the code exposed. The profiles found them
+without being asked to.
