@@ -80,10 +80,21 @@ you follow and the process Jarvis runs use the same vocabulary.
 | `reviewer` | the swarm panel ([swarm.py](jarvis/pipeline/swarm.py)) | read-only |
 | `consolidator` | the swarm consolidator | read-only |
 
+A second set are **task profiles** — agent-mode personas for a whole class of
+work, each scoped by the tools it is granted rather than by instructions alone:
+
+| Agent | Purpose | Tools |
+|---|---|---|
+| `bug-fix` | diagnose a bug, fix the cause, prove the rest still works | read + write |
+| `research` | answer a question about the codebase with citations | read-only **by design** |
+| `convention-audit` | check a diff or module against these rules | read-only **by design** |
+
 Two properties are deliberate and must survive any edit to these agents:
 
-- **`validator` has no edit tools.** A validator that repairs its own findings
-  cannot be trusted to report them.
+- **`validator`, `research` and `convention-audit` have no edit tools.** A role
+  that reports must not be able to change what it reports on. For `research` and
+  `convention-audit` this makes "must not modify code" a structural fact, not a
+  request the model may reinterpret.
 - **`reviewer` instances never see each other.** Run several in parallel with
   different perspectives, then pass every opinion to `consolidator` — which is the
   only one that knows the goal. This is the shape in `swarm.py`, followed exactly.

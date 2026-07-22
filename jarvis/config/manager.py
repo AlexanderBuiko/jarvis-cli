@@ -82,6 +82,25 @@ _PARAM_VALIDATORS: dict[str, tuple] = {
         lambda v: v >= 1,
         "window_size must be at least 1",
     ),
+    # Hard cap on generated tokens. Must be a positive count — 0 or negative asks
+    # the provider for a non-positive completion, which is silently misbehaving
+    # rather than rejected upstream.
+    "max_tokens": (
+        lambda v: v > 0,
+        "max_tokens must be a positive integer",
+    ),
+    # Top-K sampling candidates. 0 disables top-K (provider default sampling);
+    # negative is meaningless.
+    "top_k": (
+        lambda v: v >= 0,
+        "top_k must be 0 or greater (0 disables top-K)",
+    ),
+    # RNG seed for reproducible sampling. None (parsed from none/null/empty) leaves
+    # it unset; when given it must be a non-negative integer.
+    "seed": (
+        lambda v: v is None or v >= 0,
+        "seed must be a non-negative integer, or none to unset",
+    ),
     # 1 = the single ValidatorAgent (default, current behaviour). >1 enables the
     # validation swarm with that many reviewer perspectives; bounded to keep the
     # per-turn token cost predictable (~N+1 calls).

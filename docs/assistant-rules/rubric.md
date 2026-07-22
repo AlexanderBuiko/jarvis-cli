@@ -46,3 +46,18 @@ If generation 1 scores 9/9, that is reported as the result. The v1 rules were
 sufficient at first pass and the iteration produced no measurable gain. No
 criterion is added, reweighted or reinterpreted after seeing a generation's
 output — that would make the comparison meaningless.
+
+---
+
+## Correction (added after all three runs)
+
+This document states that `support`, `quiz` and `files` are all missing from
+`COMMAND_TREE`. That is wrong about `files`: it is the name of an MCP server
+(`FastMCP("files")` in `jarvis/mcp_servers/files_server.py:33`), not a REPL
+command, and it was never supposed to appear in `COMMAND_TREE` at all. The real
+gap is two commands — `support` and `quiz`.
+
+The original text above is left unedited on purpose. This file's value is that it
+was frozen before the first run, so it is corrected by appending, never by
+rewriting. The error weakens the prediction's stated evidence but does not change
+the prediction itself, which failed in all three runs regardless.

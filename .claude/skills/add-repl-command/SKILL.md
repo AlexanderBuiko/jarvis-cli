@@ -7,7 +7,7 @@ description: Add a new command to the Jarvis REPL. Use when the task is to add a
 
 A command in this codebase is registered in **six** places. Five of them are
 obvious from reading `commands.py`. Two are routinely missed, including by the
-repository's own author — `support`, `quiz` and `files` are all still absent from
+repository's own author — `support` and `quiz` are both still absent from
 `COMMAND_TREE`, so none of them has tab completion.
 
 Work through the list. Do not stop when the command "works": a command that runs
@@ -102,6 +102,6 @@ Add a `<Thing>Store` in `jarvis/session/`, following `task_store.py` /
 ## Verify
 
 ```bash
-.venv/bin/ruff check jarvis/          # baseline is 5 pre-existing errors
+.venv/bin/ruff check jarvis/          # baseline is 5 pre-existing errors (2 F401 + 3 E731)
 .venv/bin/python -m pytest -q
 ```

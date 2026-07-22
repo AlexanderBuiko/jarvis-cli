@@ -66,11 +66,15 @@ you work on task-state code, use these exact stage names — never invent
 `research`, `implement`, `report`. Transitions go through
 `TaskStore.advance_stage`, never by assigning `task.stage` directly.
 
-## Subagents and skills
+## Profiles, subagents and skills
 
-The global rules say the main agent routes and delegates. In this project the
-subagents mirror the application's own pipeline roles one-to-one, so the process
-you follow and the process Jarvis runs use the same vocabulary.
+Three layers. The global `CLAUDE.md` **selects a profile**; the profile
+(`~/.claude/profiles/`) is a **workflow** that orchestrates **subagents**
+(`.claude/agents/`), which do the work. A profile is not a subagent.
+
+**Subagents — the workers.** They mirror the application's own pipeline roles
+one-to-one, so the process you follow and the process Jarvis runs use the same
+vocabulary.
 
 | Agent | Mirrors | Tools |
 |---|---|---|
@@ -80,13 +84,26 @@ you follow and the process Jarvis runs use the same vocabulary.
 | `reviewer` | the swarm panel ([swarm.py](jarvis/pipeline/swarm.py)) | read-only |
 | `consolidator` | the swarm consolidator | read-only |
 
-Two properties are deliberate and must survive any edit to these agents:
-
-- **`validator` has no edit tools.** A validator that repairs its own findings
-  cannot be trusted to report them.
+- **`validator` has no edit tools.** A role that reports must not be able to
+  change what it reports on.
 - **`reviewer` instances never see each other.** Run several in parallel with
-  different perspectives, then pass every opinion to `consolidator` — which is the
-  only one that knows the goal. This is the shape in `swarm.py`, followed exactly.
+  different perspectives, then pass every opinion to `consolidator` — the only one
+  that knows the goal. This is the shape in `swarm.py`, followed exactly.
+
+**Profiles — the workflows.** The global selector routes to `bug-fix`, `research`
+or `convention-audit`. Those profiles are stack-agnostic; this project supplies
+the concrete commands they invoke:
+
+| Where the profile says… | In this project, use |
+|---|---|
+| run the test suite | `.venv/bin/python -m pytest -q` |
+| run the linter | `.venv/bin/ruff check jarvis/` — baseline is **5** pre-existing errors (2× `F401` in `task_store.py`, 3× `E731` in `__main__.py` + `rag/evaluation.py`); only new errors count |
+| confirm imports | `.venv/bin/python -c "import jarvis.repl.loop"` |
+| the config-param audit | a **value-accepting** parser (`int`/`float`/`str`) in `_PARAM_PARSERS` with no `_PARAM_VALIDATORS` entry ([config/manager.py](jarvis/config/manager.py)) — antipattern 5. A self-validating parser like `_parse_bool` needs no validator. |
+
+Their "read-only" steps (`research`, `convention-audit`) never invoke `executor`,
+so "must not change code" is enforced by the chain, not by a rule the model must
+remember.
 
 Skills carry the **procedural** knowledge — the step-by-step recipes — while this
 file carries the **conventions**. That split is on purpose: a recipe is needed
@@ -339,10 +356,17 @@ diff without touching disk when it is set.
 
 ### 5. A half-registered config parameter
 `config set <key>` is driven by two tables in
-[jarvis/config/manager.py](jarvis/config/manager.py). A key added to
-`_PARAM_PARSERS` but not `_PARAM_VALIDATORS` accepts garbage silently;
-`SUPPORTED_PARAMS` is derived from the parsers, so a validator-only entry is
-dead code. Add to **both**, with the `#` comment explaining the knob.
+[jarvis/config/manager.py](jarvis/config/manager.py). A key whose parser accepts
+a range of values (`int`, `float`, bare `str`) but has no `_PARAM_VALIDATORS`
+entry takes garbage silently — that is the antipattern. Add to **both**, with the
+`#` comment explaining the knob.
+
+The exception is a parser that **already rejects bad input by raising** — e.g.
+`_parse_bool`, which raises on anything but true/false. Parsing *is* validation
+there, so a validator entry would be redundant, not missing. Do not flag those.
+So the real gap is a value-accepting parser (`int`/`float`/`str`) with no
+validator; a self-validating parser is complete on its own. (`SUPPORTED_PARAMS`
+is derived from the parsers, so a validator-only entry is dead code regardless.)
 
 Same failure mode elsewhere: **partially registering any feature**. This
 codebase registers things in more than one place, and a feature that works but
