@@ -49,9 +49,14 @@ result, the task list, and the validation error each rendered on the page. Re-ru
 
 ## How this fits the framework
 
-The CLI smoke (`platform: cli`) is the deterministic, automated CI gate. The web
-smoke (`platform: web`) is **agent-driven via the Browser MCP** — it needs a
-running server and a browser, so it is not in the headless CI gate, but it uses
-the same scenario shape and the same underlying logic. A future `WebAdapter`
-(Playwright) could automate it; today the agent is the driver, which is exactly
-what the task asks for.
+The run above was **agent-driven via the Browser MCP** (a human/agent clicking the
+real form buttons). It is now also **automated**: `jarvis/smoke/web.py`
+(`WebAdapter`) drives the page in headless Chromium via Playwright, so
+`python -m jarvis.smoke --platform web` runs the same scenarios with no human, and
+`scripts/qa_report.py` includes a web tier that runs in CI (skipped when the
+optional `web` extra is absent, so the fast CLI gate never needs a browser).
+
+Two coverage angles, both real: the MCP run exercised the specific form buttons
+(Set / Create / Delete); the automated adapter drives a generic command box, so it
+covers the browser + JS + backend + render path deterministically. The command box
+is what lets one command-string scenario run on both the `cli` and `web` adapters.

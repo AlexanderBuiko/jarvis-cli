@@ -56,8 +56,11 @@ jarvis/__main__.py        entry point — wires router, gateways, agent, REPL
 launches the real `jarvis` in a pty and drives it like a user, capturing each
 step's terminal output as a "screenshot". `python scripts/qa_report.py` runs both
 and emits one report (the CI gate in `ai-review.yml`). The smoke runner talks to a
-`SmokeAdapter` Protocol so a web/mobile adapter plugs in later; only the CLI
-adapter has a real target today (the terminal is jarvis's only UI).
+`SmokeAdapter` Protocol, so a scenario is a command string that runs on any
+platform: the **cli** adapter pty-drives the REPL (deterministic, always gated),
+the **web** adapter ([jarvis/smoke/web.py](jarvis/smoke/web.py)) drives the web UI
+in headless Chromium via Playwright (optional `web` extra — skipped when absent).
+A mobile adapter plugs in the same way.
 
 **Layering rule.** `repl/` may import anything. Library packages must not import
 `repl/`. Library packages must not print.

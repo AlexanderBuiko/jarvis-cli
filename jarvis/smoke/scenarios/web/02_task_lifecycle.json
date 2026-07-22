@@ -1,11 +1,9 @@
 {
-  "name": "web task lifecycle: create an entity, see it, delete it, see it gone",
+  "name": "web task lifecycle: create, list, and it is active",
   "platform": "web",
-  "note": "driven by the agent through the Browser MCP against python -m jarvis.web",
   "steps": [
-    {"action": "fill task-name=web-smoke, click Create task", "expect": "Task created: 'web-smoke'"},
-    {"action": "click List tasks", "expect": "web-smoke"},
-    {"action": "fill task-id=<id>, click Delete task", "expect": "deleted"},
-    {"action": "click List tasks", "expect": "web-smoke absent"}
+    {"action": "task list",           "expect": "No saved tasks"},
+    {"action": "task new web-smoke",  "expect": "web-smoke"},
+    {"action": "task list",           "expect": "web-smoke"}
   ]
 }

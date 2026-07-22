@@ -41,29 +41,58 @@ def _level_1() -> tuple[bool, str]:
 
 
 def _level_2() -> tuple[bool, str]:
-    """Level 2 — the UI smoke suite (CLI platform)."""
+    """Level 2 — the UI smoke suite (CLI platform, the deterministic gate)."""
     code, out = _run([PYTHON, "-m", "jarvis.smoke"])
     return code == 0, out.strip()
 
 
+def _playwright_available() -> bool:
+    """True when the optional web extra is installed and its browser present."""
+    code, _ = _run([PYTHON, "-c", "import playwright"])
+    return code == 0
+
+
+def _level_2_web() -> tuple[bool | None, str]:
+    """Level 2 (web) — headless-browser smoke. Optional: skipped (None) when
+    Playwright is not installed, so the base gate never depends on a browser."""
+    if not _playwright_available():
+        return None, "skipped — playwright not installed (pip install -e .[web])"
+    scenarios = str(ROOT / "jarvis" / "smoke" / "scenarios" / "web")
+    code, out = _run([PYTHON, "-m", "jarvis.smoke", "--platform", "web", scenarios])
+    return code == 0, out.strip()
+
+
+def _verdict(ok: bool | None) -> str:
+    return "SKIP" if ok is None else ("PASS" if ok else "FAIL")
+
+
 def build_report() -> tuple[bool, str]:
-    """Run both levels and render one report; return (all passed, report text)."""
+    """Run the levels and render one report; return (all passed, report text).
+
+    The web tier is optional: when Playwright is absent it is SKIPped and does not
+    fail the gate, keeping the fast CLI path free of a browser dependency."""
     l1_ok, l1_out = _level_1()
     l2_ok, l2_out = _level_2()
-    overall = l1_ok and l2_ok
+    web_ok, web_out = _level_2_web()
+    # A skipped (None) web tier does not count against the overall result.
+    overall = l1_ok and l2_ok and web_ok is not False
 
     lines = [
         _RULE,
         f"QA REPORT — {'PASS' if overall else 'FAIL'}",
         _RULE,
-        f"  Level 1 (code tests) : {'PASS' if l1_ok else 'FAIL'}",
-        f"  Level 2 (UI smoke)   : {'PASS' if l2_ok else 'FAIL'}",
+        f"  Level 1 (code tests)     : {_verdict(l1_ok)}",
+        f"  Level 2 (UI smoke, cli)  : {_verdict(l2_ok)}",
+        f"  Level 2 (UI smoke, web)  : {_verdict(web_ok)}",
         "",
         "── Level 1: code tests " + "─" * 47,
         l1_out or "(no output)",
         "",
-        "── Level 2: UI smoke " + "─" * 49,
+        "── Level 2: UI smoke — cli " + "─" * 43,
         l2_out or "(no output)",
+        "",
+        "── Level 2: UI smoke — web " + "─" * 43,
+        web_out or "(no output)",
     ]
     if not overall:
         lines += [

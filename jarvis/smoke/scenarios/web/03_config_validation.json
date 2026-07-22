@@ -1,8 +1,7 @@
 {
   "name": "web validation: a bad numeric value is rejected in the UI",
   "platform": "web",
-  "note": "driven by the agent through the Browser MCP against python -m jarvis.web",
   "steps": [
-    {"action": "fill cfg-key=max_tokens, cfg-value=-100, click Set", "expect": "max_tokens must be a positive integer"}
+    {"action": "config set max_tokens -100", "expect": "max_tokens must be a positive integer"}
   ]
 }

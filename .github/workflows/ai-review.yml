@@ -34,7 +34,10 @@ jobs:
           python-version: "3.11"
 
       - name: Install the package and test tools
-        run: pip install -e . pytest
+        run: pip install -e .[web] pytest
+
+      - name: Install the headless browser (for the web smoke tier)
+        run: python -m playwright install --with-deps chromium
 
       - name: QA gate — Level-1 code tests + Level-2 UI smoke
         # One report from both levels. Blocking: a broken test or smoke step

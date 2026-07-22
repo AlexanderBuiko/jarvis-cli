@@ -20,12 +20,14 @@ from pathlib import Path
 from .cli import CLIAdapter
 from .report import render_report
 from .runner import load_scenarios, run_suite
+from .web import WebAdapter
 
 _DEFAULT_SCENARIOS = Path(__file__).resolve().parent / "scenarios"
 
-# platform → zero-arg factory that builds a fresh adapter. Add web/mobile here.
+# platform → zero-arg factory that builds a fresh adapter. Add mobile here later.
 _ADAPTERS = {
     "cli": CLIAdapter,
+    "web": WebAdapter,
 }
 
 
@@ -34,7 +36,7 @@ def main(argv: list[str] | None = None) -> int:
                                      description="Level-2 UI smoke, driven through the real interface.")
     parser.add_argument("scenarios", nargs="?", default=str(_DEFAULT_SCENARIOS),
                         help="a scenario .json file or a directory of them")
-    parser.add_argument("--platform", default="cli", choices=sorted(_ADAPTERS) + ["web", "mobile"],
+    parser.add_argument("--platform", default="cli", choices=sorted(_ADAPTERS) + ["mobile"],
                         help="which interface to drive (default: cli)")
     parser.add_argument("--report", help="write the report to this file as well as stdout")
     args = parser.parse_args(argv)

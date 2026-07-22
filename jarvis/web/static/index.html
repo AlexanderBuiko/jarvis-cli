@@ -49,6 +49,14 @@
   </section>
 
   <section>
+    <h2>Command</h2>
+    <div>
+      <input id="cmd" data-testid="cmd" placeholder="config show" style="width: 60%">
+      <button id="run" data-testid="run">Run</button>
+    </div>
+  </section>
+
+  <section>
     <h2>Result</h2>
     <pre id="output" data-testid="output">(no command run yet)</pre>
   </section>
@@ -76,6 +84,10 @@
     document.getElementById("task-create").onclick = () => run(`task new ${val("task-name")}`);
     document.getElementById("task-list").onclick = () => run("task list");
     document.getElementById("task-delete").onclick = () => run(`task delete ${val("task-id")}`);
+    document.getElementById("run").onclick = () => run(val("cmd"));
+    document.getElementById("cmd").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") run(val("cmd"));
+    });
   </script>
 </body>
 </html>

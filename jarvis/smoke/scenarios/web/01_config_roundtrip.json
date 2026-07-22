@@ -1,9 +1,8 @@
 {
-  "name": "web config round-trip: set a value via the form and show it",
+  "name": "web config round-trip: set a value and see it in show",
   "platform": "web",
-  "note": "driven by the agent through the Browser MCP against python -m jarvis.web",
   "steps": [
-    {"action": "fill cfg-key=temperature, cfg-value=0.7, click Set", "expect": "temperature = 0.7"},
-    {"action": "click Show config", "expect": "temperature"}
+    {"action": "config set temperature 0.7", "expect": "temperature = 0.7"},
+    {"action": "config show",                "expect": "temperature"}
   ]
 }
