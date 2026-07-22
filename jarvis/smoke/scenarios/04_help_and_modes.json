@@ -1,0 +1,8 @@
+{
+  "name": "help surface: the command list and mode help render",
+  "platform": "cli",
+  "steps": [
+    {"action": "help", "expect": "Commands"},
+    {"action": "help", "expect": "Modes"}
+  ]
+}
