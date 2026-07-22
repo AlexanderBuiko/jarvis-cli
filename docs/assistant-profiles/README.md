@@ -1,27 +1,51 @@
 # Day 2 — Agent-mode profiles
 
-Three task profiles for the assistant, each a subagent in
-[`.claude/agents/`](../../.claude/agents/), each scoped by the tools it is granted
-rather than by instructions alone.
+Three task profiles for the assistant. A profile is **not** a subagent — it is a
+workflow that the global `CLAUDE.md` selects and that orchestrates the Day-1
+subagents.
 
-| Profile | File | Tools | Constraint made structural |
+```
+~/.claude/CLAUDE.md            SELECTOR — reads the request, picks a profile
+        │
+        ├─ profiles/bug-fix.md          workflows: which subagents,
+        ├─ profiles/research.md          in what order, for what purpose
+        └─ profiles/convention-audit.md
+                    │
+                    ▼
+.claude/agents/  planner · executor · validator · reviewer · consolidator
+                    THE WORKERS the profile orchestrates
+```
+
+| Profile | Global file | Chain (subagents) | Writes? |
 |---|---|---|---|
-| Bug Fix | `bug-fix.md` | read + write + bash | must show test output to claim "checked" |
-| Research | `research.md` | read-only | cannot modify code — no edit tools exist |
-| Convention Audit | `convention-audit.md` | read-only | cannot fix what it reports on |
+| Bug Fix | `~/.claude/profiles/bug-fix.md` | reproduce → `planner` → `executor` → `validator` | yes |
+| Research | `~/.claude/profiles/research.md` | `planner` (read-only) → answer | no |
+| Convention Audit | `~/.claude/profiles/convention-audit.md` | `reviewer` ×N → `consolidator` | no |
+
+Snapshots of the global files live in this repo as evidence:
+[`global-CLAUDE.selector.md`](global-CLAUDE.selector.md) and
+[`profiles/`](profiles/).
 
 ## The design choice
 
-The teacher's "what the assistant SHOULD NOT do" is enforced through **tool
-grants, not prose**. `research` and `convention-audit` are given no `Edit` or
-`Write` tool, so "do not change the code" is not a rule the model must remember —
-it is a capability the model does not have. This is the same reasoning that keeps
-the Day 1 `validator` read-only: a role that reports must not be able to alter
-what it reports on.
+The teacher's "what the assistant SHOULD NOT do" is enforced by the **chain, not
+prose**. The research and audit profiles simply never invoke `executor` — the only
+subagent that can write — so "do not change the code" is a structural fact, not a
+rule the model must remember. This is the same reasoning that keeps the Day-1
+`validator` read-only.
 
-Bug Fix keeps its constraint (do not ignore the tests) in prose, because it *must*
-write. It is bound instead by its response format: every row of "What I checked"
-must be a command that was actually run, and anything unrun goes to "Not done".
+Bug Fix keeps its "do not ignore the tests" constraint in its response format,
+because it *must* write: every row of "What I checked" must be a command that was
+actually run, and anything unrun goes to "Not done".
+
+### Why not subagents (the first attempt)
+
+The profiles were first built as three extra subagents in `.claude/agents/`. That
+was the wrong form: a subagent is a *worker* the main agent delegates to, while a
+profile is a *mode the main agent itself enters* that decides which workers to
+use. The task asks for the second. Corrected per the tutor's guidance — profiles
+in a global folder, the global `CLAUDE.md` reduced to a selector — and recorded in
+[`iterations.md`](iterations.md).
 
 ## Each profile answers the four required questions
 
@@ -50,9 +74,12 @@ The ground truth was confirmed by running the checks directly (see each task fil
 
 ### Running one
 
-Open a fresh session, invoke the subagent by name with the task file's prompt,
-and capture the transcript to `<profile>/transcript.md`. Then record the outcome
-in `<profile>/result.md` against the task's success criteria.
+Open a fresh session and give the task file's prompt verbatim. The global
+selector should pick the profile on its own — that routing is part of what is
+being tested, so do not name the profile yourself. Capture the transcript to
+`<profile>/transcript.md`, then record the outcome in `<profile>/result.md`
+against the task's success criteria. Note in the transcript whether the selector
+chose the right profile unprompted.
 
 For Bug Fix, reset the tree afterwards — the fix is evidence, not something to
 keep unless you want it:
