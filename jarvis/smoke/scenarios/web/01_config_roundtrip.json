@@ -1,0 +1,8 @@
+{
+  "name": "web config round-trip: set a value and see it in show",
+  "platform": "web",
+  "steps": [
+    {"action": "config set temperature 0.7", "expect": "temperature = 0.7"},
+    {"action": "config show",                "expect": "temperature"}
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "name": "web task lifecycle: create, list, and it is active",
+  "platform": "web",
+  "steps": [
+    {"action": "task list",           "expect": "No saved tasks"},
+    {"action": "task new web-smoke",  "expect": "web-smoke"},
+    {"action": "task list",           "expect": "web-smoke"}
+  ]
+}

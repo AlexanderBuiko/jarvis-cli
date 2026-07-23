@@ -1,0 +1,9 @@
+{
+  "name": "task lifecycle: create a task, see it listed, then it is the active one",
+  "platform": "cli",
+  "steps": [
+    {"action": "task list",              "expect": "No saved tasks"},
+    {"action": "task new smoke-demo",    "expect": "smoke-demo"},
+    {"action": "task list",              "expect": "smoke-demo"}
+  ]
+}

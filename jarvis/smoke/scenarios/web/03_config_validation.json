@@ -1,0 +1,7 @@
+{
+  "name": "web validation: a bad numeric value is rejected in the UI",
+  "platform": "web",
+  "steps": [
+    {"action": "config set max_tokens -100", "expect": "max_tokens must be a positive integer"}
+  ]
+}

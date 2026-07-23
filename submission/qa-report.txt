@@ -1,0 +1,421 @@
+══════════════════════════════════════════════════════════════════════
+QA REPORT — PASS
+══════════════════════════════════════════════════════════════════════
+  Level 1 (code tests)     : PASS
+  Level 2 (UI smoke, cli)  : PASS
+  Level 2 (UI smoke, web)  : PASS
+
+── Level 1: code tests ───────────────────────────────────────────────
+........................................................................ [ 15%]
+........................................................................ [ 30%]
+........................................................................ [ 46%]
+........................................................................ [ 61%]
+........................................................................ [ 77%]
+........................................................................ [ 92%]
+.................................                                        [100%]
+465 passed in 1.91s
+
+── Level 2: UI smoke — cli ───────────────────────────────────────────
+SMOKE REPORT
+────────────────────────────────────────────────────────────────────
+scenarios: 4/4 passed
+
+[PASS] config round-trip: set a value and see it persist in the session  (cli)
+────────────────────────────────────────────────────────────────────
+  ok step 1: config set temperature 0.7
+      expect: 'temperature = 0.7'  →  found
+      | Updated: temperature = 0.7
+
+  ok step 2: config show
+      expect: 'Active configuration'  →  found
+      | Active configuration:
+      |   temperature  =  0.7
+
+  ok step 3: config show
+      expect: 'temperature'  →  found
+      | Active configuration:
+      |   temperature  =  0.7
+
+[PASS] config validation: bad numeric values are rejected at the prompt  (cli)
+────────────────────────────────────────────────────────────────────
+  ok step 1: config set max_tokens -100
+      expect: 'max_tokens must be a positive integer'  →  found
+      | Error: max_tokens must be a positive integer
+
+  ok step 2: config set top_k -5
+      expect: 'top_k must be 0 or greater'  →  found
+      | Error: top_k must be 0 or greater (0 disables top-K)
+
+  ok step 3: config set temperature 999
+      expect: 'temperature must be between 0.0 and 2.0'  →  found
+      | Error: temperature must be between 0.0 and 2.0
+
+[PASS] task lifecycle: create a task, see it listed, then it is the active one  (cli)
+────────────────────────────────────────────────────────────────────
+  ok step 1: task list
+      expect: 'No saved tasks'  →  found
+      | No saved tasks. Use 'task new <name>'.
+
+  ok step 2: task new smoke-demo
+      expect: 'smoke-demo'  →  found
+      | Task created: 'smoke-demo' (ae088b98). Describe what you want to accomplish to begin (your next message starts it).
+      | task: smoke-demo  ·  stage: clarification
+
+  ok step 3: task list
+      expect: 'smoke-demo'  →  found
+      | task: smoke-demo  ·  stage: clarification
+      | Tasks (1)
+      | ────────────────────────────────────────────────────────────
+      |   smoke-demo                    ae088b98  clarification  ←
+      | ────────────────────────────────────────────────────────────
+      | Use: task start <name-or-id>
+      | task: smoke-demo  ·  stage: clarification
+
+[PASS] help surface: the command list and mode help render  (cli)
+────────────────────────────────────────────────────────────────────
+  ok step 1: help
+      expect: 'Commands'  →  found
+      | Jarvis — conversational AI agent
+      | Modes
+      | ─────
+      |   >   Prompt mode  — input is sent to the agent
+      |   Type ! on an empty line to toggle between modes.
+      |   Ctrl+G             Clear the input buffer
+      |   ↑ / ↓             Navigate session history (prompt or command)
+      |   ↑ / ↓             Navigate autocomplete suggestions when visible
+      |   Tab                Accept selected suggestion
+      | Commands
+      | ────────
+      |   help                          Show this help message
+      |   help <question>               Ask the project assistant about jarvis-cli
+      |                                 (RAG over the docs, grounded + cited; includes the
+      |                                 current git branch via MCP)
+      |   support <question> [ticket=T-… | user=U-…] [debug]
+      |                                 Support assistant: answer grounded in the FAQ and
+      |                                 tailored to the user's ticket/CRM context. Plain prose
+      |                                 by default; add 'debug' to show sources + quotes.
+      |   config show                   Show active configuration parameters
+      |   config set <key> <val>        Set a parameter
+      |   config update <k=v> …         Set multiple parameters at once
+      |   config reset                  Clear all parameters (revert to API defaults)
+      |   thread                        Show the current conversation context
+      |   thread clear                  Clear the active thread's messages
+      |   thread load                   List all saved threads
+      |   thread load <name-or-id>      Switch to an existing thread
+      |   thread new [name]             Start a new empty thread
+      |   thread rename <name>          Rename the active thread
+      |   thread delete <name-or-id>    Permanently delete a thread
+      |   thread summary                Show token, cost, compression state, facts, and topic summaries
+      |   thread state                  Show the dialogue task state (Goal / Given / Constraints)
+      |   session chat                  Show the full conversation transcript
+      |   session summary               Show aggregate session statistics with cost charts
+      |   session api                   Show raw API request/response payloads
+      |   mcp list                      List MCP tools available to the agent each turn
+      |   mcp call <tool> [k=v ...]     Call an MCP tool directly (e.g. mcp call weather.get_weather city=London)
+      |   MCP tools are offered to the model automatically on every chat answer and task
+      |   stage; 'mcp' is for inspecting/calling them by hand.
+      |   index build <path> [k=v ...]  Load → chunk → embed → store a document index
+      |                                 (suffixes=.py,.md to index code, e.g. for PR review)
+      |   index list                    List saved indexes
+      |   index show [name]             Show an index's header and sample chunks
+      |   index search <query> [k=v]    Semantic search over an index (name=, k=)
+      |   index compare <path> [k=v]    Compare fixed vs structure-aware chunking (query=, size=, overlap=)
+      |   index delete <name>           Delete an index
+      |   rag ask <question> [k=v]      Answer once without RAG vs with RAG, side by side
+      |   rag eval [name=..] [k=v]      Run the 10 control questions and score quality
+      |                                 (answers=off → cheap retrieval-only run)
+      |   Indexing builds a local vector index for retrieval (RAG). Embeddings use the
+      |   provider set by JARVIS_EMBED_PROVIDER (default 'ollama'; 'openrouter' optional).
+      |   Chunking has two strategies — 'fixed' (fixed-size with overlap) and 'structure'
+      |   (Markdown headings/sections) — selectable per build and comparable via
+      |   'index compare'. Indexes are JSON under ~/.jarvis/indexes/.
+      |   RAG chat mode: once an index is built, ground your thread's answers in it with
+      |     config set rag on
+      |     config set rag_index <name>      (a name from 'index list')
+      |   Then every prompt-mode message retrieves the top matching chunks, injects them
+      |   into the turn, and the answer cites them as `filename › section`. A per-turn
+      |   notice shows which sources were used. Turn it off with 'config set rag off' to
+      |   compare against the model's general (un-grounded) answer.
+      |   task                          Show the active task (working memory)
+      |   task new [name]               Create a task workspace and enter it
+      |   task list                     List all saved tasks and their stages
+      |   task start <name-or-id>       Enter an existing task workspace
+      |   task run                      Continue the entered task with no new input
+      |   task exit                     Leave the task, back to chat (state preserved)
+      |   task delete <name-or-id>      Permanently delete a task
+      |   task attach <name-or-id>      Pin a finished task's result into this thread's context
+      |   task detach <name-or-id>      Remove an attached task result from this thread
+      |   Tasks and chat are two separate surfaces. Threads ('thread …') are pure
+      |   conversation. A task is a standalone workspace with its own context: 'task start'
+      |   (or 'task new') enters it, 'task exit' leaves. While inside a task your messages
+      |   drive its pipeline; outside, they're normal chat.
+      |   Stages: clarification → planning → execution → validation → done (enforced in code).
+      |   Inside a task your next message drives it, and 'task run' continues with no new
+      |   input. The pipeline pauses only when it needs you:
+      |     • a free-text question (clarification, or an execution step needing input), or
+      |     • a Confirm / Reject choice at the two critical gates — plan approval and the
+      |       final done decision (↑/↓ to move the arrow, Enter to choose). Reject asks
+      |       "What's the problem?" and reworks with your feedback.
+      |   Execution runs step-by-step under a live step table; press Ctrl+C to stop (the
+      |   last completed step is saved — 'task run' resumes from it). At done, a short
+      |   summary is shown and the full deliverable is saved to a result file (its path is
+      |   shown and also in 'task show'). The task is then exited and its result is
+      |   attached to the current thread, enriching that chat's context. Use
+      |   'task attach'/'task detach' to manage attachments manually.
+      |   invariants                    Show the global invariants (hard rules)
+      |   invariants init               Scaffold invariants.md from a template
+      |   profile                       Show the system-managed user profile
+      |   profile onboard               Run (or re-run) the onboarding interview
+      |   invariants.md is the single, app-wide hard-rule file. Scaffold it with
+      |   'invariants init', then edit ~/.jarvis/memory/invariants.md directly.
+      |   It is injected into every prompt AND enforced in code: when a request conflicts
+      |   with an invariant, the agent refuses, names the invariant, and explains why.
+      |   profile.md is system-managed: created by 'profile onboard' and refined by
+      |   'personalize'. It is injected into every prompt (all threads).
+      |   personalize                   Propose a profile.md Style update from recent activity
+      |                                 (shows current vs proposed, asks before overwriting).
+      |                                 Only the '## Style' section is ever changed.
+      |   exit / quit                   Exit Jarvis
+      | Parameters
+      | ──────────
+      |   model              str    OpenRouter model identifier
+      |                             Can only be changed on an empty thread.
+      |   temperature        float  0.0 – 2.0   Sampling temperature
+      |   top_p              float  0.0 – 1.0   Nucleus sampling probability
+      |   top_k              int                Top-k sampling cutoff
+      |   max_tokens         int                Maximum tokens in the response
+      |   seed               int | none         Random seed for reproducibility
+      |   solution_strategy  direct | step_by_step | prompt_generation | expert_panel
+      |                              direct            — answer immediately (default)
+      |                              step_by_step      — reason through steps explicitly
+      |                              expert_panel      — three-expert panel with synthesis
+      |                              prompt_generation — two-stage optimised prompt pipeline
+      |   context_strategy   none | compression | sliding_window | sticky_facts | dialogue_state | topics
+      |                              none           — full history sent verbatim (default)
+      |                              compression    — rolling summary replaces older turns
+      |                              sliding_window — only the most recent N turns are sent
+      |                              sticky_facts   — structured facts block prepended to history
+      |                              dialogue_state — task memory: a Goal/Given/Constraints block kept and
+      |                                               updated each turn, so a long chat never loses its purpose
+      |                                               (pair with 'rag on' for a mini-chat with sources). See 'thread state'.
+      |                              topics         — automatic topic routing; context scoped per topic
+      |                              Can only be changed on an empty thread.
+      |   window_size        int    Number of turns kept when context_strategy=sliding_window (default: 10)
+      |   review_agents      int    Reviewers on the validation swarm (1–5, default 1). 1 = the single
+      |                             validator; >1 runs an independent reviewer panel + consolidator
+      |                             (~N+1 model calls per validation turn, all billed to the task,
+      |                             run concurrently).
+      |   execution_agents   int    Agents executing the plan in parallel (1–8, default 1). 1 = sequential,
+      |                             one step per turn; >1 runs independent steps concurrently, ordering
+      |                             dependent ones via the plan's [after: …] annotations.
+      |   rag                bool   Ground chat answers in a local index (default off). When on, each
+      |                             prompt-mode message retrieves chunks and the answer cites the source.
+      |   rag_index          str    Name of the index to retrieve from (see 'index list').
+      |   rag_k              int    Candidates retrieved per message — top-K before filtering (1–20, default 5).
+      |   rag_min_score      float  Relevance cutoff: drop chunks with cosine < this (−1.0–1.0, default 0 = off).
+      |   rag_top_n          int    Chunks kept after filter/rerank — top-N (1–20, default: keep all K).
+      |   rag_rerank         off | cross_encoder
+      |                             Second stage. 'off' = cosine order only. 'cross_encoder' reorders with a
+      |                             local sentence-transformers model (pip install sentence-transformers).
+      |   rag_rewrite        bool   Rewrite the question into a better search query before retrieving (one
+      |                             extra LLM call, default off).
+      |   rag_cite           bool   Debug view: append Sources + verbatim Quotes to grounded answers (default OFF; plain prose otherwise).
+      |   rag_strict         bool   Closed-domain mode (default off). When on, weak/irrelevant context →
+      |                             "I don't know" + ask to clarify. When off (augmented), weak context just
+      |                             answers normally, so off-topic chat isn't hijacked.
+      |   rag_idk_threshold  float  Confidence bar (−1.0–1.0, default 0). If the best chunk's cosine score is
+      |                             below this, context is "weak" (see rag_strict).
+
+  ok step 2: help
+      expect: 'Modes'  →  found
+      | Jarvis — conversational AI agent
+      | Modes
+      | ─────
+      |   >   Prompt mode  — input is sent to the agent
+      |   Type ! on an empty line to toggle between modes.
+      |   Ctrl+G             Clear the input buffer
+      |   ↑ / ↓             Navigate session history (prompt or command)
+      |   ↑ / ↓             Navigate autocomplete suggestions when visible
+      |   Tab                Accept selected suggestion
+      | Commands
+      | ────────
+      |   help                          Show this help message
+      |   help <question>               Ask the project assistant about jarvis-cli
+      |                                 (RAG over the docs, grounded + cited; includes the
+      |                                 current git branch via MCP)
+      |   support <question> [ticket=T-… | user=U-…] [debug]
+      |                                 Support assistant: answer grounded in the FAQ and
+      |                                 tailored to the user's ticket/CRM context. Plain prose
+      |                                 by default; add 'debug' to show sources + quotes.
+      |   config show                   Show active configuration parameters
+      |   config set <key> <val>        Set a parameter
+      |   config update <k=v> …         Set multiple parameters at once
+      |   config reset                  Clear all parameters (revert to API defaults)
+      |   thread                        Show the current conversation context
+      |   thread clear                  Clear the active thread's messages
+      |   thread load                   List all saved threads
+      |   thread load <name-or-id>      Switch to an existing thread
+      |   thread new [name]             Start a new empty thread
+      |   thread rename <name>          Rename the active thread
+      |   thread delete <name-or-id>    Permanently delete a thread
+      |   thread summary                Show token, cost, compression state, facts, and topic summaries
+      |   thread state                  Show the dialogue task state (Goal / Given / Constraints)
+      |   session chat                  Show the full conversation transcript
+      |   session summary               Show aggregate session statistics with cost charts
+      |   session api                   Show raw API request/response payloads
+      |   mcp list                      List MCP tools available to the agent each turn
+      |   mcp call <tool> [k=v ...]     Call an MCP tool directly (e.g. mcp call weather.get_weather city=London)
+      |   MCP tools are offered to the model automatically on every chat answer and task
+      |   stage; 'mcp' is for inspecting/calling them by hand.
+      |   index build <path> [k=v ...]  Load → chunk → embed → store a document index
+      |                                 (suffixes=.py,.md to index code, e.g. for PR review)
+      |   index list                    List saved indexes
+      |   index show [name]             Show an index's header and sample chunks
+      |   index search <query> [k=v]    Semantic search over an index (name=, k=)
+      |   index compare <path> [k=v]    Compare fixed vs structure-aware chunking (query=, size=, overlap=)
+      |   index delete <name>           Delete an index
+      |   rag ask <question> [k=v]      Answer once without RAG vs with RAG, side by side
+      |   rag eval [name=..] [k=v]      Run the 10 control questions and score quality
+      |                                 (answers=off → cheap retrieval-only run)
+      |   Indexing builds a local vector index for retrieval (RAG). Embeddings use the
+      |   provider set by JARVIS_EMBED_PROVIDER (default 'ollama'; 'openrouter' optional).
+      |   Chunking has two strategies — 'fixed' (fixed-size with overlap) and 'structure'
+      |   (Markdown headings/sections) — selectable per build and comparable via
+      |   'index compare'. Indexes are JSON under ~/.jarvis/indexes/.
+      |   RAG chat mode: once an index is built, ground your thread's answers in it with
+      |     config set rag on
+      |     config set rag_index <name>      (a name from 'index list')
+      |   Then every prompt-mode message retrieves the top matching chunks, injects them
+      |   into the turn, and the answer cites them as `filename › section`. A per-turn
+      |   notice shows which sources were used. Turn it off with 'config set rag off' to
+      |   compare against the model's general (un-grounded) answer.
+      |   task                          Show the active task (working memory)
+      |   task new [name]               Create a task workspace and enter it
+      |   task list                     List all saved tasks and their stages
+      |   task start <name-or-id>       Enter an existing task workspace
+      |   task run                      Continue the entered task with no new input
+      |   task exit                     Leave the task, back to chat (state preserved)
+      |   task delete <name-or-id>      Permanently delete a task
+      |   task attach <name-or-id>      Pin a finished task's result into this thread's context
+      |   task detach <name-or-id>      Remove an attached task result from this thread
+      |   Tasks and chat are two separate surfaces. Threads ('thread …') are pure
+      |   conversation. A task is a standalone workspace with its own context: 'task start'
+      |   (or 'task new') enters it, 'task exit' leaves. While inside a task your messages
+      |   drive its pipeline; outside, they're normal chat.
+      |   Stages: clarification → planning → execution → validation → done (enforced in code).
+      |   Inside a task your next message drives it, and 'task run' continues with no new
+      |   input. The pipeline pauses only when it needs you:
+      |     • a free-text question (clarification, or an execution step needing input), or
+      |     • a Confirm / Reject choice at the two critical gates — plan approval and the
+      |       final done decision (↑/↓ to move the arrow, Enter to choose). Reject asks
+      |       "What's the problem?" and reworks with your feedback.
+      |   Execution runs step-by-step under a live step table; press Ctrl+C to stop (the
+      |   last completed step is saved — 'task run' resumes from it). At done, a short
+      |   summary is shown and the full deliverable is saved to a result file (its path is
+      |   shown and also in 'task show'). The task is then exited and its result is
+      |   attached to the current thread, enriching that chat's context. Use
+      |   'task attach'/'task detach' to manage attachments manually.
+      |   invariants                    Show the global invariants (hard rules)
+      |   invariants init               Scaffold invariants.md from a template
+      |   profile                       Show the system-managed user profile
+      |   profile onboard               Run (or re-run) the onboarding interview
+      |   invariants.md is the single, app-wide hard-rule file. Scaffold it with
+      |   'invariants init', then edit ~/.jarvis/memory/invariants.md directly.
+      |   It is injected into every prompt AND enforced in code: when a request conflicts
+      |   with an invariant, the agent refuses, names the invariant, and explains why.
+      |   profile.md is system-managed: created by 'profile onboard' and refined by
+      |   'personalize'. It is injected into every prompt (all threads).
+      |   personalize                   Propose a profile.md Style update from recent activity
+      |                                 (shows current vs proposed, asks before overwriting).
+      |                                 Only the '## Style' section is ever changed.
+      |   exit / quit                   Exit Jarvis
+      | Parameters
+      | ──────────
+      |   model              str    OpenRouter model identifier
+      |                             Can only be changed on an empty thread.
+      |   temperature        float  0.0 – 2.0   Sampling temperature
+      |   top_p              float  0.0 – 1.0   Nucleus sampling probability
+      |   top_k              int                Top-k sampling cutoff
+      |   max_tokens         int                Maximum tokens in the response
+      |   seed               int | none         Random seed for reproducibility
+      |   solution_strategy  direct | step_by_step | prompt_generation | expert_panel
+      |                              direct            — answer immediately (default)
+      |                              step_by_step      — reason through steps explicitly
+      |                              expert_panel      — three-expert panel with synthesis
+      |                              prompt_generation — two-stage optimised prompt pipeline
+      |   context_strategy   none | compression | sliding_window | sticky_facts | dialogue_state | topics
+      |                              none           — full history sent verbatim (default)
+      |                              compression    — rolling summary replaces older turns
+      |                              sliding_window — only the most recent N turns are sent
+      |                              sticky_facts   — structured facts block prepended to history
+      |                              dialogue_state — task memory: a Goal/Given/Constraints block kept and
+      |                                               updated each turn, so a long chat never loses its purpose
+      |                                               (pair with 'rag on' for a mini-chat with sources). See 'thread state'.
+      |                              topics         — automatic topic routing; context scoped per topic
+      |                              Can only be changed on an empty thread.
+      |   window_size        int    Number of turns kept when context_strategy=sliding_window (default: 10)
+      |   review_agents      int    Reviewers on the validation swarm (1–5, default 1). 1 = the single
+      |                             validator; >1 runs an independent reviewer panel + consolidator
+      |                             (~N+1 model calls per validation turn, all billed to the task,
+      |                             run concurrently).
+      |   execution_agents   int    Agents executing the plan in parallel (1–8, default 1). 1 = sequential,
+      |                             one step per turn; >1 runs independent steps concurrently, ordering
+      |                             dependent ones via the plan's [after: …] annotations.
+      |   rag                bool   Ground chat answers in a local index (default off). When on, each
+      |                             prompt-mode message retrieves chunks and the answer cites the source.
+      |   rag_index          str    Name of the index to retrieve from (see 'index list').
+      |   rag_k              int    Candidates retrieved per message — top-K before filtering (1–20, default 5).
+      |   rag_min_score      float  Relevance cutoff: drop chunks with cosine < this (−1.0–1.0, default 0 = off).
+      |   rag_top_n          int    Chunks kept after filter/rerank — top-N (1–20, default: keep all K).
+      |   rag_rerank         off | cross_encoder
+      |                             Second stage. 'off' = cosine order only. 'cross_encoder' reorders with a
+      |                             local sentence-transformers model (pip install sentence-transformers).
+      |   rag_rewrite        bool   Rewrite the question into a better search query before retrieving (one
+      |                             extra LLM call, default off).
+      |   rag_cite           bool   Debug view: append Sources + verbatim Quotes to grounded answers (default OFF; plain prose otherwise).
+      |   rag_strict         bool   Closed-domain mode (default off). When on, weak/irrelevant context →
+      |                             "I don't know" + ask to clarify. When off (augmented), weak context just
+      |                             answers normally, so off-topic chat isn't hijacked.
+      |   rag_idk_threshold  float  Confidence bar (−1.0–1.0, default 0). If the best chunk's cosine score is
+      |                             below this, context is "weak" (see rag_strict).
+
+── Level 2: UI smoke — web ───────────────────────────────────────────
+SMOKE REPORT
+────────────────────────────────────────────────────────────────────
+scenarios: 3/3 passed
+
+[PASS] web config round-trip: set a value and see it in show  (web)
+────────────────────────────────────────────────────────────────────
+  ok step 1: config set temperature 0.7
+      expect: 'temperature = 0.7'  →  found
+      | Updated: temperature = 0.7
+
+  ok step 2: config show
+      expect: 'temperature'  →  found
+      | Active configuration:
+      | 
+      |   temperature  =  0.7
+
+[PASS] web task lifecycle: create, list, and it is active  (web)
+────────────────────────────────────────────────────────────────────
+  ok step 1: task list
+      expect: 'No saved tasks'  →  found
+      | No saved tasks. Use 'task new <name>'.
+
+  ok step 2: task new web-smoke
+      expect: 'web-smoke'  →  found
+      | Task created: 'web-smoke' (1d2e1318). Describe what you want to accomplish to begin (your next message starts it).
+
+  ok step 3: task list
+      expect: 'web-smoke'  →  found
+      | Tasks (1)
+      | ────────────────────────────────────────────────────────────
+      |   web-smoke                     1d2e1318  clarification  ←
+      | ────────────────────────────────────────────────────────────
+      | Use: task start <name-or-id>
+
+[PASS] web validation: a bad numeric value is rejected in the UI  (web)
+────────────────────────────────────────────────────────────────────
+  ok step 1: config set max_tokens -100
+      expect: 'max_tokens must be a positive integer'  →  found
+      | Error: max_tokens must be a positive integer

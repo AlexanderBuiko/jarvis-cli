@@ -1,0 +1,9 @@
+{
+  "name": "config validation: bad numeric values are rejected at the prompt",
+  "platform": "cli",
+  "steps": [
+    {"action": "config set max_tokens -100", "expect": "max_tokens must be a positive integer"},
+    {"action": "config set top_k -5",        "expect": "top_k must be 0 or greater"},
+    {"action": "config set temperature 999", "expect": "temperature must be between 0.0 and 2.0"}
+  ]
+}
