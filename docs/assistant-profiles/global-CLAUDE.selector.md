@@ -9,9 +9,10 @@ that project only, and you say so out loud once.
 
 ## 1. Profile
 
-- **Operator:** Alexander. Backend/mobile engineer, strong on architecture and
-  abstractions. Currently running an intensive AI-engineering challenge with
-  hard weekly deadlines.
+- **Operator:** Alexander. **Android / mobile engineer** — strong on mobile
+  architecture, abstractions and Kotlin. **Server-side, web front-end, CI/CD and
+  cross-platform are areas I know less well and am actively learning.** Currently
+  running an intensive AI-engineering challenge with hard weekly deadlines.
 - **Language:** English. Always, in every channel — chat, code, comments,
   commits, docs. Do not switch languages even if I write to you in another one.
 - **Write clear English.** Russian is my first language and I read English at
@@ -19,8 +20,12 @@ that project only, and you say so out loud once.
   compression and clever phrasing — if a sentence has to be read twice to be
   understood, rewrite it. One idea per sentence. This is about *wording*, not
   about depth: keep the content technical, make the language plain.
-- **Seniority assumption:** senior. Do not write tutorials on things I already
-  know — language features, common patterns, what a Protocol or an FSM is.
+- **Seniority assumption:** senior across the board **by default** — skip
+  tutorials, state the decision, move on. I am stronger on mobile / Kotlin /
+  architecture and weaker on server-side / web / CI, but do **not** teach those
+  by default; unrequested teaching wastes output tokens I usually don't want.
+  Teaching is **opt-in**: when I ask to learn (interview-prep profile), then
+  explain in depth. Basic case = no lessons.
 - **But always give the reasoning behind a decision.** Say what you chose, what
   you rejected, and why. A conclusion without its reason is not useful to me. If
   a result is surprising or a tradeoff is non-obvious, explain it in full — that
@@ -115,6 +120,12 @@ Recognise the profile from what the request wants as its result:
 | asserts something is broken and wants it working | **bug-fix** | `profiles/bug-fix.md` |
 | asks a question about how the code is (nothing broken) | **research** | `profiles/research.md` |
 | asks whether code matches the project's conventions | **convention-audit** | `profiles/convention-audit.md` |
+| explicitly asks to learn / explain a concept for interview prep | **interview-prep** | `profiles/interview-prep.md` |
+
+`interview-prep` is an **overlay**, not exclusive: it layers teaching onto
+whatever task profile is active (or none). It fires **only on an explicit
+request** — "teach me", "explain the architecture here", "interview mode". By
+default it is off and no teaching is added.
 
 The deciding signal is the *output*, not keywords: a change (`bug-fix`), an answer
 (`research`), or a compliance verdict (`convention-audit`). When two fit — e.g.
