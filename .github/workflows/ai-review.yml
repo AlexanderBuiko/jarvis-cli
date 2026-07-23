@@ -51,6 +51,22 @@ jobs:
           name: qa-report
           path: qa-report.txt
 
+      - name: Comment the QA report on the PR
+        # always(): post the report even when the gate failed — that is when it
+        # is most useful. Needs pull-requests: write (granted above).
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "## QA Report — Level 1 (code tests) + Level 2 (UI smoke)"
+            echo ""
+            echo '```'
+            cat qa-report.txt
+            echo '```'
+          } > qa-comment.md
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file qa-comment.md
+
       - name: Review the PR
         # Advisory: don't fail the whole check if the brain is unavailable.
         continue-on-error: true
