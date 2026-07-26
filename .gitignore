@@ -19,6 +19,9 @@ env/
 # Personal / copyrighted knowledge-base sources — never commit (source books and
 # their extracted text). The index is rebuilt locally from your own copies.
 knowledge_base/android/
+# Mentor lecture transcripts (paid-course IP). Kept locally to re-distil; the
+# committed English distillations live in docs/lectures/.
+transcriptions/
 
 # Local secrets / config (never commit). The .example files are the committed templates.
 .env
