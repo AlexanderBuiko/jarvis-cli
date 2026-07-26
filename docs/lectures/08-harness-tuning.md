@@ -70,5 +70,5 @@ profile, invariants, and an explicit task state machine; wire sub-agents with
 contracts and the right parallel/sequential/router topology; add skills, commands,
 hooks, and the MCP set. The deliverable is a tuned execution loop, not a feature.
 
-> Related deliverable in this repo: `deliverables/08-local-optimization.md`
+> Related deliverable in this repo: `../deliverables/08-local-optimization.md`
 > (optimising a local model for a specific task — a separate day's assignment).
