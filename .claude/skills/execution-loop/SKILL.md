@@ -62,9 +62,11 @@ For each task, top to bottom, sequentially:
    everything else→feature/default. (`~/.claude/profiles/`.)
 3. **Plan** — spawn `planner` with the task text. Get the ordered plan + files.
 4. **Execute** — spawn `executor` with the approved plan. It edits files.
-5. **Validate** — spawn `validator`. It runs `.venv/bin/ruff check jarvis/`
-   (baseline is 5 pre-existing errors — only new ones count),
-   `.venv/bin/python -m pytest -q`, and the import check.
+5. **Validate** — spawn `validator`. It runs the **target project's** own checks:
+   - **calckit sandbox** → `.venv/bin/python -m pytest -q` from the sandbox root
+     (the sandbox's `.venv` has pytest; calckit imports from the cwd). No ruff.
+   - **jarvis-cli** → `.venv/bin/ruff check jarvis/` (baseline is 5 pre-existing
+     errors — only new ones count), `.venv/bin/python -m pytest -q`, import check.
 6. **Gate on the validator's report:**
    - **Pass** → go to commit.
    - **Fail, within retry budget** → spawn `executor` again with the validator's
@@ -101,7 +103,7 @@ before the first non-done task.
 
 ## Metric log
 
-Write to `docs/day5-execution-loop/harness-runs/run-<YYYYMMDD-HHMMSS>.md`
+Write to `./harness-runs/run-<YYYYMMDD-HHMMSS>.md` in the run directory
 (create the dir). **Append after each task** so a crash still leaves the log.
 One table, then a summary block at the end:
 
