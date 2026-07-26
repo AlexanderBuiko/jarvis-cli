@@ -1,0 +1,89 @@
+# Continue config for jarvis-cli — local code assistant over Ollama.
+#
+# Copy this to ~/.continue/config.yaml (Continue reads the same file in PyCharm
+# and VS Code). The `rules` block points at the repo's system prompt by absolute
+# path, so the committed file IS the live system prompt — edit it there, no copy.
+#
+# num_ctx gotcha: Ollama defaults its context window to 2048 tokens regardless of
+# what `contextLength` says here, so a long file gets silently truncated. Each
+# chat model below sets `num_ctx` in requestOptions to force the real window.
+name: jarvis-local
+version: 0.0.1
+schema: v1
+
+models:
+  # ── Chat #1 — primary. Best quality/speed on 24 GB. ──────────────────────────
+  - name: Qwen2.5 Coder 7B
+    provider: ollama
+    model: qwen2.5-coder:7b
+    roles: [chat, edit, apply]
+    capabilities:
+      - tool_use          # force Continue's native tool-calling path in Agent mode;
+                          # without it, the model prints tool-call JSON as text and
+                          # nothing is executed (Ollama models are often mis-detected)
+    defaultCompletionOptions:
+      temperature: 0.1        # code wants low temperature — deterministic, on-style
+      topP: 0.9
+      contextLength: 8192
+    requestOptions:
+      extraBodyProperties:
+        options:
+          num_ctx: 8192       # override Ollama's 2048 default (the real fix)
+
+  # ── Chat #2 — MoE, 16B knowledge at ~2.4B active params, fast. ───────────────
+  - name: DeepSeek Coder V2 Lite 16B
+    provider: ollama
+    model: deepseek-coder-v2:16b-lite-instruct-q4_0
+    roles: [chat, edit, apply]
+    capabilities:
+      - tool_use          # force Continue's native tool-calling path in Agent mode;
+                          # without it, the model prints tool-call JSON as text and
+                          # nothing is executed (Ollama models are often mis-detected)
+    defaultCompletionOptions:
+      temperature: 0.1
+      topP: 0.9
+      contextLength: 8192
+    requestOptions:
+      extraBodyProperties:
+        options:
+          num_ctx: 8192
+
+  # ── Chat #3 — quality ceiling on this box; slower, tighter on RAM. ───────────
+  - name: Qwen2.5 Coder 14B
+    provider: ollama
+    model: qwen2.5-coder:14b
+    roles: [chat, edit, apply]
+    capabilities:
+      - tool_use          # force Continue's native tool-calling path in Agent mode;
+                          # without it, the model prints tool-call JSON as text and
+                          # nothing is executed (Ollama models are often mis-detected)
+    defaultCompletionOptions:
+      temperature: 0.1
+      topP: 0.9
+      contextLength: 8192
+    requestOptions:
+      extraBodyProperties:
+        options:
+          num_ctx: 8192
+
+  # ── Autocomplete — FIM base model, sized for keystroke latency. ──────────────
+  - name: Qwen2.5 Coder 1.5B (autocomplete)
+    provider: ollama
+    model: qwen2.5-coder:1.5b-base
+    roles: [autocomplete]
+    defaultCompletionOptions:
+      temperature: 0.1
+
+# The rules file → the model's system prompt (concatenated into the system
+# message). Absolute path so it resolves regardless of workspace.
+rules:
+  - uses: file:///Users/alexanderbuyko/PycharmProjects/jarvis-cli/docs/local-assistant/system-prompt.md
+
+# Which files the model sees. `@`-mention these in chat; `repo-map` gives it the
+# project's file/symbol skeleton without pasting whole files (cheap on tokens).
+context:
+  - provider: currentFile
+  - provider: file
+  - provider: code
+  - provider: repo-map
+  - provider: diff

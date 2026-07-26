@@ -6,6 +6,7 @@ returns a string to print. Handlers are pure except `personalize`, which
 prompts for confirmation before applying a profile update.
 """
 
+import os
 import re
 from pathlib import Path
 
@@ -50,6 +51,8 @@ Commands
   config set <key> <val>        Set a parameter
   config update <k=v> …         Set multiple parameters at once
   config reset                  Clear all parameters (revert to API defaults)
+
+  models                        List configured LLM models and the active default
 
   thread                        Show the current conversation context
   thread clear                  Clear the active thread's messages
@@ -152,6 +155,7 @@ Parameters
                             Can only be changed on an empty thread.
   temperature        float  0.0 – 2.0   Sampling temperature
   top_p              float  0.0 – 1.0   Nucleus sampling probability
+  presence_penalty   float  -2.0 – 2.0  Penalise already-seen tokens (repetition)
   top_k              int                Top-k sampling cutoff
   max_tokens         int                Maximum tokens in the response
   seed               int | none         Random seed for reproducibility
@@ -412,6 +416,42 @@ def handle_config_update(args: list[str], config_manager: ConfigManager) -> str:
         return f"Updated:\n{config_manager.update(args)}"
     except (ValueError, TypeError) as exc:
         return f"Error: {exc}"
+
+
+def handle_models(config_manager: ConfigManager) -> str:
+    """List each provider's effective model and star the active one.
+
+    Jarvis keeps no model registry — every provider carries one default that
+    ``config set model`` overrides for the *active* provider only. So "configured
+    models" is resolved, not stored: for each provider show the id it would really
+    run, and star the one the live ``provider`` toggle selects. The resolution
+    mirrors the status line's, so the two never disagree.
+    """
+    from ..llm.router import current_provider
+    from ..openrouter.client import DEFAULT_MODEL as OPENROUTER_DEFAULT
+    from ..ollama.client import DEFAULT_MODEL as OLLAMA_DEFAULT
+
+    active = current_provider(config_manager)
+    configured = config_manager.runtime.get("model")
+
+    rows: list[tuple[str, str, str]] = []
+    for provider, default in (("openrouter", OPENROUTER_DEFAULT), ("ollama", OLLAMA_DEFAULT)):
+        if provider != active:
+            model = default                       # override applies only to the active provider
+        elif provider == "ollama":
+            # A cloud model id is meaningless on ollama, so honour the override
+            # only when it is not a cloud path — same guard the status line uses.
+            model = configured if (configured and "/" not in configured) else (
+                os.environ.get("JARVIS_OLLAMA_MODEL") or default
+            )
+        else:
+            model = configured or default
+        rows.append(("*" if provider == active else " ", provider, model))
+
+    width = max(len(provider) for _, provider, _ in rows)
+    lines = ["Configured LLM models (* = active default):"]
+    lines += [f"  {marker} {provider.ljust(width)}  {model}" for marker, provider, model in rows]
+    return "\n".join(lines) + "\n"
 
 
 def handle_config_reset(config_manager: ConfigManager) -> str:

@@ -1,0 +1,190 @@
+diff --git a/jarvis/config/manager.py b/jarvis/config/manager.py
+index 9600d26..92efd02 100644
+--- a/jarvis/config/manager.py
++++ b/jarvis/config/manager.py
+@@ -28,6 +28,7 @@ _PARAM_PARSERS: dict[str, Any] = {
+     "task_template":     str,
+     "temperature":       float,
+     "top_p":             float,
++    "presence_penalty":  float,
+     "top_k":             int,
+     "max_tokens":        int,
+     "seed":              lambda v: None if v.lower() in ("none", "null", "") else int(v),
+@@ -70,6 +71,12 @@ _PARAM_VALIDATORS: dict[str, tuple] = {
+         lambda v: 0.0 <= v <= 1.0,
+         "top_p must be between 0.0 and 1.0",
+     ),
++    # Penalises tokens already present, to discourage repetition. The provider
++    # range is -2.0 (encourage reuse) to 2.0 (strongly discourage it).
++    "presence_penalty": (
++        lambda v: -2.0 <= v <= 2.0,
++        "presence_penalty must be between -2.0 and 2.0",
++    ),
+     "solution_strategy": (
+         lambda v: v in ("direct", "step_by_step", "prompt_generation", "expert_panel"),
+         "solution_strategy must be one of: direct, step_by_step, prompt_generation, expert_panel",
+diff --git a/jarvis/repl/commands.py b/jarvis/repl/commands.py
+index 28502b5..2ac8af0 100644
+--- a/jarvis/repl/commands.py
++++ b/jarvis/repl/commands.py
+@@ -6,6 +6,7 @@ returns a string to print. Handlers are pure except `personalize`, which
+ prompts for confirmation before applying a profile update.
+ """
+ 
++import os
+ import re
+ from pathlib import Path
+ 
+@@ -51,6 +52,8 @@ Commands
+   config update <k=v> …         Set multiple parameters at once
+   config reset                  Clear all parameters (revert to API defaults)
+ 
++  models                        List configured LLM models and the active default
++
+   thread                        Show the current conversation context
+   thread clear                  Clear the active thread's messages
+   thread load                   List all saved threads
+@@ -152,6 +155,7 @@ Parameters
+                             Can only be changed on an empty thread.
+   temperature        float  0.0 – 2.0   Sampling temperature
+   top_p              float  0.0 – 1.0   Nucleus sampling probability
++  presence_penalty   float  -2.0 – 2.0  Penalise already-seen tokens (repetition)
+   top_k              int                Top-k sampling cutoff
+   max_tokens         int                Maximum tokens in the response
+   seed               int | none         Random seed for reproducibility
+@@ -414,6 +418,42 @@ def handle_config_update(args: list[str], config_manager: ConfigManager) -> str:
+         return f"Error: {exc}"
+ 
+ 
++def handle_models(config_manager: ConfigManager) -> str:
++    """List each provider's effective model and star the active one.
++
++    Jarvis keeps no model registry — every provider carries one default that
++    ``config set model`` overrides for the *active* provider only. So "configured
++    models" is resolved, not stored: for each provider show the id it would really
++    run, and star the one the live ``provider`` toggle selects. The resolution
++    mirrors the status line's, so the two never disagree.
++    """
++    from ..llm.router import current_provider
++    from ..openrouter.client import DEFAULT_MODEL as OPENROUTER_DEFAULT
++    from ..ollama.client import DEFAULT_MODEL as OLLAMA_DEFAULT
++
++    active = current_provider(config_manager)
++    configured = config_manager.runtime.get("model")
++
++    rows: list[tuple[str, str, str]] = []
++    for provider, default in (("openrouter", OPENROUTER_DEFAULT), ("ollama", OLLAMA_DEFAULT)):
++        if provider != active:
++            model = default                       # override applies only to the active provider
++        elif provider == "ollama":
++            # A cloud model id is meaningless on ollama, so honour the override
++            # only when it is not a cloud path — same guard the status line uses.
++            model = configured if (configured and "/" not in configured) else (
++                os.environ.get("JARVIS_OLLAMA_MODEL") or default
++            )
++        else:
++            model = configured or default
++        rows.append(("*" if provider == active else " ", provider, model))
++
++    width = max(len(provider) for _, provider, _ in rows)
++    lines = ["Configured LLM models (* = active default):"]
++    lines += [f"  {marker} {provider.ljust(width)}  {model}" for marker, provider, model in rows]
++    return "\n".join(lines) + "\n"
++
++
+ def handle_config_reset(config_manager: ConfigManager) -> str:
+     config_manager.reset()
+     return "Configuration cleared. Using API defaults.\n"
+diff --git a/jarvis/repl/input.py b/jarvis/repl/input.py
+index 5b27b13..f054733 100644
+--- a/jarvis/repl/input.py
++++ b/jarvis/repl/input.py
+@@ -44,6 +44,7 @@ COMMAND_TREE: dict[str, dict] = {
+     "session": {"chat": {}, "summary": {}, "api": {}},
+     "thread":  {"summary": {}, "load": {}, "new": {}, "clear": {}, "rename": {}, "delete": {}},
+     "config":  {"show": {}, "set": {}, "update": {}, "reset": {}},
++    "models":  {},
+     "task":    {"new": {}, "list": {}, "show": {}, "start": {}, "run": {}, "exit": {}, "delete": {}, "attach": {}, "detach": {}},
+     "invariants": {"show": {}, "init": {}},
+     "profile": {"show": {}, "onboard": {}},
+diff --git a/jarvis/repl/loop.py b/jarvis/repl/loop.py
+index 9656fb8..4f01745 100644
+--- a/jarvis/repl/loop.py
++++ b/jarvis/repl/loop.py
+@@ -24,6 +24,7 @@ from .commands import (
+     handle_config_set,
+     handle_config_update,
+     handle_config_reset,
++    handle_models,
+     handle_thread_show,
+     handle_thread_clear,
+     handle_thread_load,
+@@ -542,6 +543,9 @@ def _dispatch(
+             return handle_config_update(args[1:], config_manager)
+         return f"Unknown config sub-command: '{sub}'"
+ 
++    if cmd == "models":
++        return handle_models(config_manager)
++
+     if cmd == "thread":
+         if not args:
+             return handle_thread_show(agent)
+diff --git a/tests/test_models_command.py b/tests/test_models_command.py
+new file mode 100644
+index 0000000..1b443bd
+--- /dev/null
++++ b/tests/test_models_command.py
+@@ -0,0 +1,28 @@
++import unittest
++
++from jarvis.config.manager import ConfigManager
++from jarvis.repl.commands import handle_models
++
++
++class ModelsCommandListsProvidersWithActiveDefault(unittest.TestCase):
++    def test_active_provider_is_starred_and_the_other_is_not(self):
++        cfg = ConfigManager()
++        cfg.set("provider", "ollama")
++
++        lines = handle_models(cfg).splitlines()
++        ollama_line = next(line for line in lines if "ollama" in line)
++        openrouter_line = next(line for line in lines if "openrouter" in line)
++
++        self.assertIn("*", ollama_line)
++        self.assertNotIn("*", openrouter_line)
++
++    def test_config_set_model_overrides_the_active_provider_id(self):
++        cfg = ConfigManager()
++        cfg.set("provider", "openrouter")
++        cfg.set("model", "anthropic/claude-3.5-sonnet")
++
++        self.assertIn("anthropic/claude-3.5-sonnet", handle_models(cfg))
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_presence_penalty_config.py b/tests/test_presence_penalty_config.py
+new file mode 100644
+index 0000000..f4e8590
+--- /dev/null
++++ b/tests/test_presence_penalty_config.py
+@@ -0,0 +1,19 @@
++import unittest
++
++from jarvis.config.manager import ConfigManager
++
++
++class PresencePenaltyConfigParameter(unittest.TestCase):
++    def test_a_value_within_range_is_accepted_and_parsed_as_float(self):
++        cfg = ConfigManager()
++        cfg.set("presence_penalty", "0.5")
++        self.assertEqual(cfg.runtime["presence_penalty"], 0.5)
++
++    def test_a_value_outside_the_minus_two_to_two_range_is_rejected(self):
++        cfg = ConfigManager()
++        with self.assertRaises(ValueError):
++            cfg.set("presence_penalty", "3.0")
++
++
++if __name__ == "__main__":
++    unittest.main()
