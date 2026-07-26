@@ -24,6 +24,7 @@ from .commands import (
     handle_config_set,
     handle_config_update,
     handle_config_reset,
+    handle_models,
     handle_thread_show,
     handle_thread_clear,
     handle_thread_load,
@@ -541,6 +542,9 @@ def _dispatch(
                 return locked
             return handle_config_update(args[1:], config_manager)
         return f"Unknown config sub-command: '{sub}'"
+
+    if cmd == "models":
+        return handle_models(config_manager)
 
     if cmd == "thread":
         if not args:

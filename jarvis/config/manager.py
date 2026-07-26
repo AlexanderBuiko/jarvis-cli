@@ -28,6 +28,7 @@ _PARAM_PARSERS: dict[str, Any] = {
     "task_template":     str,
     "temperature":       float,
     "top_p":             float,
+    "presence_penalty":  float,
     "top_k":             int,
     "max_tokens":        int,
     "seed":              lambda v: None if v.lower() in ("none", "null", "") else int(v),
@@ -69,6 +70,12 @@ _PARAM_VALIDATORS: dict[str, tuple] = {
     "top_p": (
         lambda v: 0.0 <= v <= 1.0,
         "top_p must be between 0.0 and 1.0",
+    ),
+    # Penalises tokens already present, to discourage repetition. The provider
+    # range is -2.0 (encourage reuse) to 2.0 (strongly discourage it).
+    "presence_penalty": (
+        lambda v: -2.0 <= v <= 2.0,
+        "presence_penalty must be between -2.0 and 2.0",
     ),
     "solution_strategy": (
         lambda v: v in ("direct", "step_by_step", "prompt_generation", "expert_panel"),
