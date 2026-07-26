@@ -1,0 +1,482 @@
+[
+  {
+    "id": "q1",
+    "topic": "coroutines",
+    "question": "What issue does using Sequence in this context cause?",
+    "options": [
+      "Thread blocking",
+      "Incorrect sequence generation",
+      "Improper function usage",
+      "Invalid coroutine handling"
+    ],
+    "correct_index": 0
+  },
+  {
+    "id": "q2",
+    "topic": "kotlin",
+    "question": "What is the function type represented by '()->Unit' in Kotlin?",
+    "options": [
+      "A function that takes no arguments and returns Unit",
+      "A function that takes an Int argument and returns a Boolean",
+      "A function that takes two Int arguments and returns an Int",
+      "A function that takes an Int and returns another function"
+    ],
+    "correct_index": 0
+  },
+  {
+    "id": "q3",
+    "topic": "compose",
+    "question": "What is the primary role of the slot table in Jetpack Compose runtime?",
+    "options": [
+      "To store the current state of the Composition",
+      "To manage the list of changes to be applied",
+      "To handle the communication between different Composable functions",
+      "To inject the Composer instance into Composable functions"
+    ],
+    "correct_index": 0
+  },
+  {
+    "id": "q4",
+    "topic": "coroutines",
+    "question": "What will be the output when a CancellationException or its subclass is thrown in a coroutine scope?",
+    "options": [
+      "The exception is propagated to the parent and causes it to fail.",
+      "The exception is caught by the parent, causing only the current coroutine to cancel.",
+      "The exception does not propagate and the parent continues execution as if nothing happened.",
+      "The exception is ignored and no output is generated."
+    ],
+    "correct_index": 2
+  },
+  {
+    "id": "q5",
+    "topic": "compose",
+    "question": "What node type does a Vector Composable emit when composed within SubcomposeLayout?",
+    "options": [
+      "VNode",
+      "LayoutNode",
+      "StateNode",
+      "CompositionNode"
+    ],
+    "correct_index": 0
+  },
+  {
+    "id": "q6",
+    "topic": "compose",
+    "question": "What does the Box measure when there are multiple children that do not match the parent size?",
+    "options": [
+      "The maximum width and height of all children",
+      "Only the first child's dimensions",
+      "The average width and height of all children",
+      "Each child's dimensions individually"
+    ],
+    "correct_index": 0
+  },
+  {
+    "id": "q7",
+    "topic": "coroutines",
+    "question": "What does the `label` field in the `myFunction` continuation represent and how is it used?",
+    "options": [
+      "It indicates whether a coroutine should start from the beginning or resume after suspension.",
+      "It stores the result of the function to be returned when the coroutine completes.",
+      "It keeps track of the number of times the coroutine has been resumed.",
+      "It determines the priority level of the coroutine in the scheduling queue."
+    ],
+    "correct_index": 0
+  },
+  {
+    "id": "q8",
+    "topic": "compose",
+    "question": "What mechanism does Compose use to handle default arguments for Composable functions?",
+    "options": [
+      "$default bitmask",
+      "$changed parameter",
+      "Kotlin's default argument support",
+      "static variable"
+    ],
+    "correct_index": 0
+  },
+  {
+    "id": "q9",
+    "topic": "compose",
+    "question": "What is the purpose of a movable group in the context of Compose functions?",
+    "options": [
+      "To reorder calls without losing identity",
+      "To replace elements based on conditions",
+      "To preserve the identity of composable calls regardless of position",
+      "To generate unique identities for non-keyed composable calls"
+    ],
+    "correct_index": 0
+  },
+  {
+    "id": "q10",
+    "topic": "kotlin",
+    "question": "What is the primary reason for preferring Sequence over Iterable when dealing with large collections in multiple processing steps?",
+    "options": [
+      "To ensure that all operations are performed eagerly and immediately",
+      "To avoid unnecessary computations until the final step of processing",
+      "To increase the memory footprint by storing intermediate results",
+      "To make the code less readable but more performant"
+    ],
+    "correct_index": 1
+  },
+  {
+    "id": "q11",
+    "topic": "kotlin",
+    "question": "When should a sealed class be used over a tagged class in Kotlin?",
+    "options": [
+      "for representing type hierarchies where only certain subclasses are allowed",
+      "when designing for inheritance and multiple unrelated classes need to share state",
+      "to confuse with the state pattern in behavioral software design patterns",
+      "for implementing the state pattern, where states are immutable objects"
+    ],
+    "correct_index": 0
+  },
+  {
+    "id": "q12",
+    "topic": "kotlin",
+    "question": "Who is this book primarily intended for based on its content?",
+    "options": [
+      "beginners learning Kotlin",
+      "experienced Android developers looking to improve their coding practices",
+      "students studying computer science fundamentals",
+      "people interested in programming history"
+    ],
+    "correct_index": 1
+  },
+  {
+    "id": "q13",
+    "topic": "compose",
+    "question": "Which method should be used to create a Text element in JavaScript DOM?",
+    "options": [
+      "document.createElement('text')",
+      "document.createTextElement('value')",
+      "document.createTextNode('value')",
+      "document.createElementText('value')"
+    ],
+    "correct_index": 2
+  },
+  {
+    "id": "q14",
+    "topic": "coroutines",
+    "question": "What happens when a Job is cancelled in Kotlin Coroutines?",
+    "options": [
+      "All children are also cancelled, but not the parent.",
+      "Only the job itself ends at the first suspension point.",
+      "Children and the parent are both immediately terminated.",
+      "The job can still be used as a parent for new coroutines after cancellation."
+    ],
+    "correct_index": 0
+  },
+  {
+    "id": "q15",
+    "topic": "kotlin",
+    "question": "How should parameters of classes with multiple parameters be formatted according to the given passage?",
+    "options": [
+      "Every parameter on another line",
+      "All parameters in one line",
+      "Parameters indented based on class name length",
+      "No specific formatting is recommended"
+    ],
+    "correct_index": 0
+  },
+  {
+    "id": "q16",
+    "topic": "kotlin",
+    "question": "What improvement is suggested for the `saveCallResult` function in terms of setting up `SourceEntity` objects?",
+    "options": [
+      "Using a for-loop to manually set each property",
+      "Implementing a factory method or primary constructor",
+      "Continuing to use apply within a forEach loop",
+      "Maintaining the current implementation without changes"
+    ],
+    "correct_index": 1
+  },
+  {
+    "id": "q17",
+    "topic": "kotlin",
+    "question": "What is a key difference between using standard collection processing functions and sequences in terms of memory usage?",
+    "options": [
+      "Sequences create new collections at every step, while standard collection functions do not.",
+      "Standard collection functions can process infinite sequences without limitations.",
+      "Sequences are less efficient than standard collections for any operation.",
+      "Sequences require more memory because they use coroutines internally."
+    ],
+    "correct_index": 1
+  },
+  {
+    "id": "q18",
+    "topic": "compose",
+    "question": "In Jetpack Compose, who creates and owns the Composer?",
+    "options": [
+      "The Composition creates and owns the Composer",
+      "The client library creates and owns the Composer",
+      "The Android platform creates and owns the Composer",
+      "The ViewGroup creates and owns the Composer"
+    ],
+    "correct_index": 0
+  },
+  {
+    "id": "q19",
+    "topic": "compose",
+    "question": "What is the primary role of Composable functions in Jetpack Compose?",
+    "options": [
+      "To build and update the in-memory representation of the UI tree",
+      "To directly manipulate the user interface elements on the screen",
+      "To define data models for the application",
+      "To handle network requests and data fetching"
+    ],
+    "correct_index": 0
+  },
+  {
+    "id": "q20",
+    "topic": "kotlin",
+    "question": "What is a key reason for defining a contract in software development?",
+    "options": [
+      "To ensure users understand implementation details",
+      "To prevent creators from breaking user implementations",
+      "To make code less readable",
+      "To increase dependency on external documentation"
+    ],
+    "correct_index": 1
+  },
+  {
+    "id": "q21",
+    "topic": "coroutines",
+    "question": "What is a key difference between suspending functions and coroutines in Kotlin?",
+    "options": [
+      "Suspending functions can be directly resumed later, while coroutines cannot.",
+      "Coroutines are stored in variables and can be resumed from any point, unlike suspending functions.",
+      "Suspending functions are not actually coroutines; they can only suspend a coroutine's execution within them.",
+      "Suspending functions must always be called inside another coroutine to work properly."
+    ],
+    "correct_index": 2
+  },
+  {
+    "id": "q22",
+    "topic": "compose",
+    "question": "What distinguishes 'composed' modifiers from 'standard' modifiers in the context of Compose UI?",
+    "options": [
+      "Composed modifiers are stateless and need to be wrapped, while standard modifiers can be directly set.",
+      "Composed modifiers require a factory function to convert them into regular modifiers before assignment, whereas standard modifiers can be assigned directly.",
+      "Standard modifiers are used for implementing compositions, while composed modifiers are not.",
+      "Both types of modifiers operate identically in Compose UI and do not have any state differences."
+    ],
+    "correct_index": 1
+  },
+  {
+    "id": "q23",
+    "topic": "compose",
+    "question": "What does the term 'lowering' refer to in the context of Kotlin compiler?",
+    "options": [
+      "The process of translating higher-level programming concepts into lower-level atomic ones",
+      "Generating intermediate representation (IR) from source code",
+      "Creating a multiplatform application using Jetpack Compose",
+      "Registering an implementation of IrGenerationExtension"
+    ],
+    "correct_index": 0
+  },
+  {
+    "id": "q24",
+    "topic": "compose",
+    "question": "What type of node does a Layout Composable emit into the Composition?",
+    "options": [
+      "A LayoutNode",
+      "A MaterialNode",
+      "A FoundationNode",
+      "An UpdateNode"
+    ],
+    "correct_index": 0
+  },
+  {
+    "id": "q25",
+    "topic": "compose",
+    "question": "What action is taken by the observer when the view tree lifecycle event is ON_DESTROY?",
+    "options": [
+      "Remove the observer from the lifecycle",
+      "Resume the pausable clock",
+      "Pause the pausable clock",
+      "Launch recomposition job"
+    ],
+    "correct_index": 0
+  },
+  {
+    "id": "q26",
+    "topic": "coroutines",
+    "question": "What is the purpose of using `launchIn` in a coroutine scope?",
+    "options": [
+      "To start flow processing on another coroutine",
+      "To modify the coroutine context downstream",
+      "To propagate the coroutine context upstream",
+      "To collect elements from the flow immediately"
+    ],
+    "correct_index": 0
+  },
+  {
+    "id": "q27",
+    "topic": "kotlin",
+    "question": "In Kotlin, how can you pass a click listener to a method without using an interface?",
+    "options": [
+      "Using a lambda expression or anonymous function",
+      "Declaring a new class that implements the OnClick interface",
+      "Passing a named function reference directly",
+      "Defining a SAM (Single-AbstractMethod) explicitly"
+    ],
+    "correct_index": 0
+  },
+  {
+    "id": "q28",
+    "topic": "kotlin",
+    "question": "What is a potential issue with using an Int to represent IDs in the initial implementation?",
+    "options": [
+      "Thread-safety issues",
+      "Inability to change ID type easily",
+      "Starting at 0 every time the program starts",
+      "All of the above"
+    ],
+    "correct_index": 3
+  },
+  {
+    "id": "q29",
+    "topic": "coroutines",
+    "question": "Which scenario correctly demonstrates the use of SupervisorJob to handle exceptions in coroutines?",
+    "options": [
+      "Wrapping a CoroutineScope with SupervisorJob and launching multiple coroutines within it",
+      "Using SupervisorJob directly as an argument to launch a single coroutine",
+      "Placing try-catch blocks around coroutine builders to handle errors",
+      "Ignoring exceptions by not using any job or scope for coroutines"
+    ],
+    "correct_index": 0
+  },
+  {
+    "id": "q30",
+    "topic": "kotlin",
+    "question": "What is a suitable generic type for an immutable linked list to ensure it can be used as a subtype of any other list?",
+    "options": [
+      "Any",
+      "List<Nothing>",
+      "LinkedList<Any>",
+      "Nothing"
+    ],
+    "correct_index": 1
+  },
+  {
+    "id": "q31",
+    "topic": "compose",
+    "question": "What parameters are added to the composableLambda function call for memoizing a Composable lambda?",
+    "options": [
+      "$composer, $key, $shouldBeTracked, $arity, and the lambda expression",
+      "$composer, $key, and the lambda expression only",
+      "$composer, $arity, and the lambda expression only",
+      "$key, $arity, and the lambda expression only"
+    ],
+    "correct_index": 0
+  },
+  {
+    "id": "q32",
+    "topic": "coroutines",
+    "question": "When implementing a service to observe and share location changes using SharedFlow in Android Room, which parameter should be set to ensure that subscribers receive the latest list of locations immediately?",
+    "options": [
+      "replay to 0",
+      "started to WhileSubscribed()",
+      "replay to 1",
+      "started to NeverSubscribed()"
+    ],
+    "correct_index": 2
+  },
+  {
+    "id": "q33",
+    "topic": "kotlin",
+    "question": "What is a key difference between defining methods as members and as extensions in terms of their usage?",
+    "options": [
+      "They both need to be imported separately",
+      "Extensions need to be imported separately while members do not",
+      "Members can only be used within the class they are defined in",
+      "Methods cannot be overridden when defined as extensions"
+    ],
+    "correct_index": 1
+  },
+  {
+    "id": "q34",
+    "topic": "compose",
+    "question": "What is one of the key properties of Composable functions in Jetpack Compose?",
+    "options": [
+      "They must be called from other Composables only",
+      "They can be executed independently without any dependencies",
+      "They are not affected by the Compose compiler",
+      "They do not require a calling context"
+    ],
+    "correct_index": 0
+  },
+  {
+    "id": "q35",
+    "topic": "kotlin",
+    "question": "In which scenario is it particularly beneficial to use explicit receivers in function calls?",
+    "options": [
+      "When working with multiple receiver contexts",
+      "When defining extension functions without any context",
+      "When implementing recursive functions without parameters",
+      "When creating a new instance of a class without using the constructor"
+    ],
+    "correct_index": 0
+  },
+  {
+    "id": "q36",
+    "topic": "compose",
+    "question": "What role does the Owner play in the Compose UI framework?",
+    "options": [
+      "It acts as the root of the Composable tree and handles layout, drawing, input, and accessibility.",
+      "It is responsible for creating and managing the Composition process itself.",
+      "It serves as a thin integration layer between Compose UI and Android's View system.",
+      "It records changes to write or read from the slot table during the Composition process."
+    ],
+    "correct_index": 2
+  },
+  {
+    "id": "q37",
+    "topic": "kotlin",
+    "question": "In Kotlin, when should you use the `data` class instead of a regular class for comparing objects?",
+    "options": [
+      "When all properties need to be compared",
+      "When only some specific properties should not be included in comparison",
+      "When no equality check is needed at all",
+      "When additional properties are declared outside the primary constructor"
+    ],
+    "correct_index": 0
+  },
+  {
+    "id": "q38",
+    "topic": "compose",
+    "question": "What role does the lambda function play within a custom Layout in Jetpack Compose?",
+    "options": [
+      "It defines the layout's measuring policy",
+      "It sets the layout's background color",
+      "It determines the layout's visibility state",
+      "It specifies the layout's padding"
+    ],
+    "correct_index": 0
+  },
+  {
+    "id": "q39",
+    "topic": "coroutines",
+    "question": "What happens when an uncaught exception occurs in a coroutine function?",
+    "options": [
+      "The function is immediately terminated and no further code is executed.",
+      "The function continues to execute until it reaches the end, ignoring the exception.",
+      "The resumeWith method catches the exception and wraps it with Result.failure before resuming the caller.",
+      "The coroutine is paused indefinitely until manually resumed."
+    ],
+    "correct_index": 2
+  },
+  {
+    "id": "q40",
+    "topic": "kotlin",
+    "question": "What is a primary advantage of using factory functions over constructors in Kotlin?",
+    "options": [
+      "They provide clear names that explain how an object is created and what arguments are used.",
+      "They can only be used for creating lists.",
+      "They must always return non-null values.",
+      "They cannot have any parameters."
+    ],
+    "correct_index": 0
+  }
+]
