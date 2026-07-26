@@ -1,0 +1,37 @@
+61532ca Merge loop/18-untested-functions-report
+ac1b4d5 [done-first-pass] report untested calckit functions
+f43738e Merge loop/17-init-all-exports
+9dd4ebd [done-first-pass] declare public API via __all__ in calckit/__init__.py
+eebdad5 Merge loop/16-readme-usage-section
+ed93ccb [done-first-pass] add Usage section to README.md
+67f7189 Merge loop/15-textutils-docstring
+2bb0b6f [done-first-pass] add module docstring to textutils.py
+be72466 Merge loop/14-test-mean-empty
+1b523e5 [done-first-pass] mean-empty test: no-op, already exists
+4b218db Merge loop/13-test-divide-zero
+7dc49f4 [done-first-pass] divide-zero test: no-op, already exists
+4fe94ad Merge loop/12-test-add-subtract-negative
+b1670f8 [done-first-pass] add negative-number test cases for add/subtract
+84c2204 Merge loop/11-require-numbers-helper
+ff6b122 [done-first-pass] extract _require_numbers helper for add/subtract
+962a402 Merge loop/10-median-rename-c
+c7d0528 [done-first-pass] median: no-op, _c already eliminated
+53d70f9 Merge loop/9-multiply-star-operator
+33d228a [done-first-pass] refactor multiply to use the * operator
+a0ee326 Merge loop/8-truncate-function
+a96073a [done-first-pass] add truncate(text, n) to textutils
+76f0dba Merge loop/7-mode-function
+c85f479 [done-first-pass] add mode(values) to stats via collections.Counter
+5f0785d Merge loop/6-clamp-function
+3fd5877 [done-first-pass] add clamp(value, low, high) to core
+b6f8054 Merge loop/5-power-function
+306f71a [done-first-pass] add power(base, exp) to core
+ba40393 Merge loop/4-median-even-length
+bdea2ee [done-first-pass] median averages two middle values for even-length input
+8aaefdb Merge loop/3-slugify-lowercase
+fe2628d [done-first-pass] slugify lowercases output
+882ab2f Merge loop/2-mean-empty-list
+0fd1d8a [done-first-pass] mean([]) returns 0.0 instead of raising
+3bb3391 Merge loop/1-divide-none-on-zero
+1023079 [done-first-pass] divide returns None on zero-division
+b2bcdfd seed
