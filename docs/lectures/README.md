@@ -23,4 +23,5 @@ notes + summary pairs; Week 5 (RAG) has raw only. Week 7's `*_english_copy.txt`
 files are DOCX renamed `.txt` — open with a zip reader, not as plain text.
 
 **Deliverables.** Per-assignment result notes live in
-[`deliverables/`](deliverables/).
+[`../deliverables/`](../deliverables/); engineering and manual-test notes in
+[`../notes/`](../notes/).
