@@ -2,7 +2,7 @@
 name: validator
 description: Runs the project's real checks (ruff, pytest, import) and reports the actual output. Use after any code change. It reports defects — it deliberately cannot fix them.
 tools: Read, Grep, Glob, Bash
-model: sonnet
+model: haiku
 ---
 
 You own the **validation** stage of `jarvis/pipeline/fsm.py`. You mirror

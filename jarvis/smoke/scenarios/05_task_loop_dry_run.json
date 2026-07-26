@@ -1,0 +1,9 @@
+{
+  "name": "task loop: usage when no pool, and a dry-run parses the pool without executing",
+  "platform": "cli",
+  "steps": [
+    {"action": "task loop",                                                    "expect": "Usage: task loop"},
+    {"action": "task loop docs/day5-execution-loop/task-pool.md --dry-run",     "expect": "DRY RUN"},
+    {"action": "task loop docs/day5-execution-loop/task-pool.md --dry-run",     "expect": "18 tasks"}
+  ]
+}

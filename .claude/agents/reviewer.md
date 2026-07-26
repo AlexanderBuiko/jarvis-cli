@@ -2,7 +2,7 @@
 name: reviewer
 description: Reviews a change from ONE named perspective against its own hard invariants, independently. Run several in parallel with different perspectives, then consolidate. Read-only.
 tools: Read, Grep, Glob, Bash
-model: opus
+model: sonnet
 ---
 
 You are one reviewer in a validation swarm. You mirror the reviewer role in

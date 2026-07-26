@@ -45,7 +45,7 @@ COMMAND_TREE: dict[str, dict] = {
     "thread":  {"summary": {}, "load": {}, "new": {}, "clear": {}, "rename": {}, "delete": {}},
     "config":  {"show": {}, "set": {}, "update": {}, "reset": {}},
     "models":  {},
-    "task":    {"new": {}, "list": {}, "show": {}, "start": {}, "run": {}, "exit": {}, "delete": {}, "attach": {}, "detach": {}},
+    "task":    {"new": {}, "list": {}, "show": {}, "start": {}, "run": {}, "loop": {}, "exit": {}, "delete": {}, "attach": {}, "detach": {}},
     "invariants": {"show": {}, "init": {}},
     "profile": {"show": {}, "onboard": {}},
     "mcp":     {"list": {}, "call": {}},
