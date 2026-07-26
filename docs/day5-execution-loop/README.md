@@ -12,10 +12,86 @@ This folder contains everything to reproduce it:
 | `sandbox-seed/` | A throwaway `calckit` project the tasks operate on (seeded with the defects the tasks fix). |
 | `RESULTS-template.md` | Where you paste the metrics from your runs. |
 
-The loop itself is a real jarvis feature: **`task loop <pool-file>`**
-(code in [`jarvis/pipeline/loop.py`](../../jarvis/pipeline/loop.py), wired in
-[`jarvis/repl/loop.py`](../../jarvis/repl/loop.py)). It is unit-tested in
-[`tests/test_execution_loop.py`](../../tests/test_execution_loop.py).
+There are **two vehicles**, on purpose:
+
+1. **Claude Code harness** (the `execution-loop` skill) — the **graded** deliverable:
+   the tuned code assistant running full-cycle, unattended. Two passes (before /
+   after tuning). See *Harness run* below.
+2. **jarvis `task loop`** — a real jarvis feature
+   ([`jarvis/pipeline/loop.py`](../../jarvis/pipeline/loop.py)), used for the
+   **cloud-vs-local** leg, since only jarvis swaps the backing model cleanly
+   (OpenRouter ↔ Ollama). Everything from "Run 1 — cloud" onward is this vehicle.
+
+---
+
+## Harness run (Claude Code) — the graded deliverable
+
+The metric is **how many tasks finish in a row without the loop stopping.** Run it
+in a fresh, isolated scratch copy of the sandbox so unattended commits never touch
+this repo.
+
+**1. Build the scratch sandbox (with the harness config + a self-validating venv):**
+
+```bash
+SANDBOX=$(mktemp -d /tmp/loop.XXXX)
+cp -R docs/day5-execution-loop/sandbox-seed/. "$SANDBOX"/
+mkdir -p "$SANDBOX/.claude/skills"
+cp -R .claude/agents "$SANDBOX/.claude/agents"           # planner/executor/validator/…
+cp -R .claude/skills/execution-loop "$SANDBOX/.claude/skills/execution-loop"
+cp docs/day5-execution-loop/task-pool.md "$SANDBOX/task-pool.md"
+cd "$SANDBOX"
+python3 -m venv .venv && .venv/bin/pip install -q pytest  # the validator's pass/fail gate
+git init -q -b main && git add -A && git commit -qm seed
+echo "sandbox = $SANDBOX"
+```
+
+**2. Pre-authorise tools so the loop never stops for permission.** Create a tiny
+allow-list in the scratch sandbox (this is the "rigid boundaries" step — cleaner
+than `--dangerously-skip-permissions`, which is the quick alternative for a
+throwaway dir):
+
+```bash
+cat > "$SANDBOX/.claude/settings.local.json" <<'JSON'
+{
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Bash(.venv/bin/python -m pytest *)",
+      "Bash(git *)", "Bash(date *)", "Bash(mkdir -p *)"
+    ]
+  }
+}
+JSON
+```
+
+**3. Start a fresh session in the sandbox and hand it one instruction:**
+
+```bash
+cd "$SANDBOX" && claude
+```
+then type:
+> run the execution loop over `task-pool.md`
+
+Walk away. The skill cuts a branch per task, runs planner→executor→validator,
+commits, merges back on green, and appends a metric row to
+`./harness-runs/run-<timestamp>.md`.
+
+**4. Collect the metrics** when it finishes/stops:
+- the **run-log** `harness-runs/run-*.md` — streak, per-task outcome, rework, time,
+  where it broke;
+- the **token/cost** from Claude Code itself (`/usage` or the session cost line) —
+  the loop does not self-report tokens.
+
+**5. Verify by hand:**
+```bash
+cd "$SANDBOX" && git log --oneline && .venv/bin/python -m pytest -q
+```
+
+**6. Tune and run pass 2.** Read "broke on → why", make the smallest fix (task
+wording / a model tier in `.claude/agents/*` / a rule), rebuild the scratch
+sandbox, rerun. The delta pass 1 → pass 2 is the headline result.
+
+Record both passes in `RESULTS-template.md`.
 
 ---
 
