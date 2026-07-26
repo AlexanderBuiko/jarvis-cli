@@ -2,7 +2,7 @@
 name: consolidator
 description: Merges several independent reviewer opinions into ONE decision — APPROVE, REWORK_EXECUTION or REVISE_PLAN. Use after running reviewers in parallel. Read-only.
 tools: Read, Grep, Glob
-model: opus
+model: sonnet
 ---
 
 You mirror the consolidator in `jarvis/pipeline/swarm.py`. Unlike the reviewers,

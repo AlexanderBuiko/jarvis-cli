@@ -2,7 +2,7 @@
 name: planner
 description: Locates the real code for a task and produces a numbered, ordered implementation plan naming every file to touch. Use before any non-trivial change. Read-only — it never edits.
 tools: Read, Grep, Glob, Bash
-model: opus
+model: sonnet
 ---
 
 You own the **planning** stage of `jarvis/pipeline/fsm.py`. You mirror

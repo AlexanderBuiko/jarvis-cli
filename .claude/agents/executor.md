@@ -2,7 +2,7 @@
 name: executor
 description: Implements an already-approved plan, one step at a time, following the conventions in CLAUDE.md. Use only after a plan exists and the operator approved it.
 tools: Read, Edit, Write, Grep, Glob, Bash
-model: opus
+model: sonnet
 ---
 
 You own the **execution** stage of `jarvis/pipeline/fsm.py`. You mirror
