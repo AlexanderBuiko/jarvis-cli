@@ -1,0 +1,35 @@
+c6138e0 Merge loop/17-init-all
+5024159 [done-first-pass] declare public API via __all__ in calckit/__init__.py
+c22ed15 Merge loop/16-readme-usage
+6473e84 [done-first-pass] add Usage section to README
+de2adbc Merge loop/15-textutils-docstring
+ae0c217 [done-first-pass] add module docstring to textutils.py
+d587e9d Merge loop/14-test-mean-empty
+86aef98 [done-first-pass] mean empty-list test already exists (no-op)
+6180607 Merge loop/13-test-divide-zero
+ab18bb1 [done-first-pass] divide zero-denominator test already exists (no-op)
+ad81506 Merge loop/12-test-add-subtract-negative
+b880bb0 [done-first-pass] add negative-number tests for add/subtract
+b6216ee Merge loop/11-require-numbers-helper
+385d824 [done-first-pass] extract _require_numbers helper for add/subtract
+68b468b Merge loop/10-median-rename-c
+c5076dc [done-first-pass] median _c already removed (no-op)
+40dca44 Merge loop/9-multiply-operator
+f4cf4ec [done-first-pass] multiply uses * operator instead of manual loop
+1b42d56 Merge loop/8-add-truncate
+be3a2ef [done-first-pass] add truncate(text, n)
+f4ec3ee Merge loop/7-add-mode
+b0fe746 [done-first-pass] add mode(values)
+35d34dc Merge loop/6-add-clamp
+edcf2df [done-first-pass] add clamp(value, low, high)
+616ed68 Merge loop/5-add-power
+528af34 [done-first-pass] add power(base, exp)
+a4b6071 Merge loop/4-median-even-avg
+55d8b6f [done-first-pass] median averages two middle values on even-length input
+5632f94 Merge loop/3-slugify-lowercase
+5731972 [done-first-pass] slugify lowercases output
+cbef34e Merge loop/2-mean-empty-zero
+de38ba6 [done-first-pass] mean returns 0.0 for empty list
+ed5dd5a Merge loop/1-divide-none-zero
+2973f43 [done-first-pass] divide returns None on zero denominator
+c7f6e1b seed
