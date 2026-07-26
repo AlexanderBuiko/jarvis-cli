@@ -16,6 +16,7 @@ import re
 from .base import (
     GATE_APPROVAL,
     GATE_QUESTION,
+    MARKER_FAIL,
     MARKER_NEEDS_USER,
     MARKER_READY,
     MARKER_REPLAN,
@@ -277,10 +278,11 @@ class ValidatorAgent(StageAgent):
         # re-planning (when the plan itself is at fault) by emitting the marker — but
         # the user still chooses.
         return (
-            "If you find the result falls short because the PLAN is flawed, incomplete, or has "
-            f"been invalidated by what was learned during execution, end your reply with {MARKER_REPLAN} "
-            "to recommend revising the plan. If the result is fine or only execution details need "
-            "fixing, do not add any marker."
+            "If any success criterion is NOT met, end your reply with the line "
+            f"{MARKER_FAIL} (the result needs rework before it can be finished). Additionally, if "
+            "the shortfall is because the PLAN is flawed, incomplete, or has been invalidated by "
+            f"what was learned during execution, also add {MARKER_REPLAN} to recommend revising the "
+            "plan rather than only re-doing execution. If every criterion is met, add no marker."
         )
 
     def input_ready(self, task: dict) -> tuple[bool, str]:
@@ -298,6 +300,7 @@ class ValidatorAgent(StageAgent):
             reject_target="execution",
             replan_target="planning",
             replan_recommended=(MARKER_REPLAN in markers),
+            fail_recommended=(MARKER_FAIL in markers or MARKER_REPLAN in markers),
             expected_action=EXPECTED_AWAIT_DONE_APPROVAL,
         )
 

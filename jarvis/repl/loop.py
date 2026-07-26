@@ -14,6 +14,7 @@ import shutil
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Callable
 
 from .commands import (
@@ -61,6 +62,13 @@ from ..agent import JarvisAgent
 from ..config.manager import ConfigManager
 from ..openrouter.client import DEFAULT_MODEL
 from ..pipeline.base import GATE_APPROVAL, GATE_QUESTION
+from ..pipeline.loop import (
+    ExecutionLoop,
+    GitCommitter,
+    OUTCOME_DONE,
+    TaskMetric,
+    parse_pool,
+)
 
 
 def _active_provider_model(config_manager: ConfigManager) -> tuple[str, str]:
@@ -361,6 +369,93 @@ def _drive_task(agent: JarvisAgent, controller: InputController, initial_pending
     return "Stopped after the step cap. Run 'task run' to continue."
 
 
+def _run_execution_loop(args: list[str], agent: JarvisAgent, config_manager: ConfigManager) -> str:
+    """Drive a whole task pool unattended, committing and measuring each task.
+
+    Kept in the UI layer (it prints live progress and reads the pool file); the
+    autonomous driving and metrics live in ``pipeline/loop.py``. The sandbox is
+    where per-task commits land — default it to JARVIS_FILES_ROOT (where the file
+    tools write) so the commits capture the model's actual changes.
+    """
+    from ..llm.router import current_provider
+
+    dry_run = False
+    sandbox: str | None = None
+    max_tasks: int | None = None
+    pool: str | None = None
+    it = iter(args)
+    for tok in it:
+        if tok == "--dry-run":
+            dry_run = True
+        elif tok == "--sandbox":
+            sandbox = next(it, None)
+        elif tok.startswith("--sandbox="):
+            sandbox = tok.split("=", 1)[1]
+        elif tok == "--max":
+            nxt = next(it, None)
+            max_tasks = int(nxt) if nxt and nxt.isdigit() else None
+        elif tok.startswith("--max="):
+            val = tok.split("=", 1)[1]
+            max_tasks = int(val) if val.isdigit() else None
+        elif not tok.startswith("--") and pool is None:
+            pool = tok
+
+    if not pool:
+        return "Usage: task loop <pool-file> [--sandbox DIR] [--max N] [--dry-run]"
+    pool_path = Path(pool).expanduser()
+    if not pool_path.is_file():
+        return f"Pool file not found: {pool_path}"
+    specs = parse_pool(pool_path.read_text(encoding="utf-8"))
+    if not specs:
+        return f"No tasks parsed from {pool_path} (expected markdown list items)."
+    if max_tasks is not None:
+        specs = specs[:max_tasks]
+
+    sandbox_dir = Path(sandbox or os.environ.get("JARVIS_FILES_ROOT") or os.getcwd()).expanduser()
+    provider = current_provider(config_manager)
+
+    if dry_run:
+        lines = [
+            "Execution loop — DRY RUN (nothing executed)",
+            f"  provider : {provider}",
+            f"  sandbox  : {sandbox_dir}",
+            f"  pool     : {pool_path}  ({len(specs)} tasks)",
+            "",
+        ]
+        for i, s in enumerate(specs, 1):
+            lines.append(f"  {i:>2}. [{s.kind}] {s.name}")
+        return "\n".join(lines)
+
+    committer = GitCommitter(sandbox_dir)
+    print(f"▶ Execution loop: {len(specs)} tasks · provider={provider} · sandbox={sandbox_dir}\n")
+
+    counter = {"i": 0}
+
+    def _on_event(kind: str, metric: TaskMetric) -> None:
+        if kind == "task_start":
+            counter["i"] += 1
+            print(f"  [{counter['i']}/{len(specs)}] ▶ {metric.name}")
+        elif kind == "task_done":
+            glyph = "✓" if metric.outcome == OUTCOME_DONE else "✗"
+            print(
+                f"  [{counter['i']}/{len(specs)}] {glyph} {metric.outcome} "
+                f"· {metric.wall_seconds:.0f}s · {metric.api_calls} reqs "
+                f"· ${metric.cost:.4f} · commit {metric.commit}"
+            )
+
+    loop = ExecutionLoop(agent, committer, provider, on_event=_on_event)
+    report = loop.run(specs)
+
+    log_dir = sandbox_dir / ".jarvis-loop"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    (log_dir / f"run-{provider}-{stamp}.jsonl").write_text(report.to_jsonl(), encoding="utf-8")
+    md_path = log_dir / f"run-{provider}-{stamp}.md"
+    md_path.write_text(report.to_markdown(), encoding="utf-8")
+
+    return f"\n{report.to_markdown()}\nLog written to {md_path} (+ .jsonl)."
+
+
 def _exec_panel(agent: JarvisAgent, frame: str, elapsed: float, interrupted: bool,
                 final: bool = False) -> list[str]:
     """Build the live execution panel: the step table plus a spinner+timer line.
@@ -582,6 +677,8 @@ def _dispatch(
             return handle_task_start(args[1:], agent)
         if sub == "run":
             return _drive_task(agent, controller)
+        if sub == "loop":
+            return _run_execution_loop(args[1:], agent, config_manager)
         if sub == "exit":
             return handle_task_exit(agent)
         if sub == "delete":

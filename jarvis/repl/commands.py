@@ -105,6 +105,7 @@ Commands
   task list                     List all saved tasks and their stages
   task start <name-or-id>       Enter an existing task workspace
   task run                      Continue the entered task with no new input
+  task loop <pool-file>         Run a whole pool of tasks unattended (autonomous)
   task exit                     Leave the task, back to chat (state preserved)
   task delete <name-or-id>      Permanently delete a task
   task attach <name-or-id>      Pin a finished task's result into this thread's context
@@ -128,6 +129,14 @@ Commands
   shown and also in 'task show'). The task is then exited and its result is
   attached to the current thread, enriching that chat's context. Use
   'task attach'/'task detach' to manage attachments manually.
+
+  'task loop <pool-file>' runs a whole POOL of tasks unattended: it reads one task
+  per markdown list item (optional '[bug]'/'[feature]'/'[refactor]'/'[test]'/
+  '[docs]'/'[research]' tag), drives each to done resolving gates by policy
+  (auto-confirm, auto-answer, bounded rework), commits after each task, and writes
+  a metrics log (streak, first-pass %, time/task, where it broke). Flags:
+  '--sandbox DIR' (where commits land; defaults to JARVIS_FILES_ROOT), '--max N',
+  '--dry-run' (parse the pool and show the plan without executing).
 
   invariants                    Show the global invariants (hard rules)
   invariants init               Scaffold invariants.md from a template
