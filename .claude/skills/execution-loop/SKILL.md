@@ -122,7 +122,9 @@ Final summary:
 - first-pass rate: NN%
 - avg time/task: NNs
 - broke on: '<task>' (<outcome>) — <why>
-- model tiers: orchestrator=opus, planner/executor/reviewer/consolidator=sonnet, validator=haiku
+- model tiers: <state the ACTUAL model each role ran on this run — read it from
+  the `.claude/agents/*` frontmatter in the run directory. Do NOT copy a fixed
+  example line; the tiers change between runs and a stale line misreports the run.>
 ```
 
 **Do not invent token counts.** Claude Code does not report per-task tokens to you;
