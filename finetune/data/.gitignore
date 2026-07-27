@@ -1,0 +1,15 @@
+# Real inbox data and everything derived from it stays local — it carries real
+# email subjects and contact names even after sanitising. The train/eval dataset
+# is reproducible from synthetic_data.py + your local review.json (fixed seed).
+review.json
+real.jsonl
+train.jsonl
+eval.jsonl
+# baseline_results.json embeds eval message subjects — keep it local
+baseline_results.json
+
+# Visible on purpose (generated, no personal content):
+#   synthetic.jsonl      — the synthetic half, concrete sample of the format
+#   baseline_results.md  — the 10 baseline responses as labels only
+!synthetic.jsonl
+!baseline_results.md
