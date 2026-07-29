@@ -1,0 +1,5 @@
+# MLX local fine-tune artifacts stay local:
+#   mlx_data/     — copied train/valid/test, embeds real email subjects
+#   mlx_adapters/ — trained LoRA weights (large binaries)
+mlx_data/
+mlx_adapters/
