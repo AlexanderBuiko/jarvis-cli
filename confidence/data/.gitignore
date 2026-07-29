@@ -1,0 +1,4 @@
+# Run results embed the correct-bucket messages, which come from the Day-6 eval
+# set (real email subjects). Keep them local; RESULTS.md holds the shareable
+# aggregates and the report is reproducible.
+confidence_results*

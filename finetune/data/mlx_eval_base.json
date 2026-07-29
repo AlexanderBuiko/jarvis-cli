@@ -1,0 +1,100 @@
+{
+  "model": "mlx-community/Qwen2.5-7B-Instruct-4bit",
+  "adapter_path": null,
+  "count": 13,
+  "accuracy": 0.385,
+  "format_clean": 1.0,
+  "results": [
+    {
+      "reference": "this_week",
+      "raw": "today",
+      "predicted": "today",
+      "correct": false,
+      "clean_format": true
+    },
+    {
+      "reference": "urgent_now",
+      "raw": "urgent_now",
+      "predicted": "urgent_now",
+      "correct": true,
+      "clean_format": true
+    },
+    {
+      "reference": "today",
+      "raw": "ignore",
+      "predicted": "ignore",
+      "correct": false,
+      "clean_format": true
+    },
+    {
+      "reference": "this_week",
+      "raw": "ignore",
+      "predicted": "ignore",
+      "correct": false,
+      "clean_format": true
+    },
+    {
+      "reference": "today",
+      "raw": "today",
+      "predicted": "today",
+      "correct": true,
+      "clean_format": true
+    },
+    {
+      "reference": "urgent_now",
+      "raw": "urgent_now",
+      "predicted": "urgent_now",
+      "correct": true,
+      "clean_format": true
+    },
+    {
+      "reference": "urgent_now",
+      "raw": "ignore",
+      "predicted": "ignore",
+      "correct": false,
+      "clean_format": true
+    },
+    {
+      "reference": "ignore",
+      "raw": "urgent_now",
+      "predicted": "urgent_now",
+      "correct": false,
+      "clean_format": true
+    },
+    {
+      "reference": "today",
+      "raw": "today",
+      "predicted": "today",
+      "correct": true,
+      "clean_format": true
+    },
+    {
+      "reference": "this_week",
+      "raw": "ignore",
+      "predicted": "ignore",
+      "correct": false,
+      "clean_format": true
+    },
+    {
+      "reference": "ignore",
+      "raw": "ignore",
+      "predicted": "ignore",
+      "correct": true,
+      "clean_format": true
+    },
+    {
+      "reference": "ignore",
+      "raw": "urgent_now",
+      "predicted": "urgent_now",
+      "correct": false,
+      "clean_format": true
+    },
+    {
+      "reference": "ignore",
+      "raw": "today",
+      "predicted": "today",
+      "correct": false,
+      "clean_format": true
+    }
+  ]
+}
