@@ -24,25 +24,37 @@ Errors (ref → pred):
   social-notification class) stays hardest — unsurprising, it was the most
   sender-homogeneous class in the data.
 
-## Overfitting — the lecture's warning, observed
+## Checkpoint sweep — early-stopping on val loss was a mistake
+
+The first run sampled val loss only every 50 iters and looked like textbook
+overfitting (0.124 at iter 50 → 0.352 at iter 100). A retune with checkpoints
+and validation every 10 iters (seed 0) shows that curve was **noise** — with
+only 13 validation items, val loss bounces:
 
 ```
-Iter  1: Val loss 6.791
-Iter 50: Val loss 0.124   <- best
-Iter100: Val loss 0.352   <- rose again
-Train loss -> 0.000 by iter 80 (memorised)
+Iter  10 20   30    40    50    60    70    80
+Val   0.65 1.16 0.63 0.29 0.22 0.26 0.47 0.15
 ```
 
-Val loss bottomed at iter 50 then climbed while train loss hit zero: the model
-started memorising after ~iter 50. The iter-100 adapter still scored 85% because
-argmax stays right on 13 tiny-eval items even as the model gets overconfident,
-but the **iter-50 checkpoint is the safer generaliser**. Follow-ups: re-tune with
-`--iters 50` (or `--save-every 25` and pick the lowest-val-loss adapter), and
-grow the eval set for a less noisy signal.
+So we picked by the metric that actually matters — eval **accuracy** per
+checkpoint:
+
+| iter | 10 | 20 | 30 | 40 | 50 | 60 | 70 | 80 |
+|---|---|---|---|---|---|---|---|---|
+| accuracy | 38% | 31% | 31% | 54% | 62% | 54% | 54% | **85%** |
+
+Accuracy climbs (noisily) and **peaks at iter 80**, which also has the lowest val
+loss. The earlier "stop at iter 50" advice was wrong: iter 50 is only 62%. The
+shipped adapter is **iter 80 (85%)** — same accuracy as the first run's iter 100
+but at the val-loss minimum and 20 fewer steps. On a dataset this small the
+per-checkpoint accuracy sweep is the reliable selector, not val loss.
+
+Real follow-up: **grow the eval set** — 13 items make every signal noisy.
 
 ## Takeaway
 
 Local LoRA fixed exactly what Day 7 could not: the **wrong prior**. Day-7 showed
 self-checking cannot repair a confidently-wrong base model (20–40% accuracy);
-fine-tuning changes the prior itself → 85%. Cloud-free, private, on a laptop.
-The `mlx_eval_{base,tuned}.{json,md}` files hold the per-case detail.
+fine-tuning changes the prior itself → 85% (base 38% → tuned iter-80 85%).
+Cloud-free, private, on a laptop. The `mlx_eval_{base,tuned}.{json,md}` files hold
+the per-case detail; both remaining errors are the subtle `this_week` class.

@@ -87,6 +87,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--adapter-path", default=None, help="LoRA adapters (omit for base model)")
     parser.add_argument("--eval", type=Path, default=_DATA / "eval.jsonl")
     parser.add_argument("--limit", type=int, default=0, help="0 = whole eval set")
+    parser.add_argument("--tag", default=None, help="output name (default: base/tuned)")
     args = parser.parse_args(argv)
 
     if not args.eval.exists():
@@ -98,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    tag = "tuned" if args.adapter_path else "base"
+    tag = args.tag or ("tuned" if args.adapter_path else "base")
     (_DATA / f"mlx_eval_{tag}.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     (_DATA / f"mlx_eval_{tag}.md").write_text(_markdown(report), encoding="utf-8")
