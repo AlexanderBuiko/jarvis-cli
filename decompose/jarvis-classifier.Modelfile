@@ -1,0 +1,19 @@
+# Ollama Modelfile for the Day-6 fine-tuned priority classifier, used as the
+# decide stage in the multi-stage pipeline (`--tuned-decide jarvis-classifier`).
+#
+# FROM points at the dequantized, LoRA-fused model produced by mlx_lm.fuse
+# (see README "Export the fine-tuned decide stage"). Adjust the path to wherever
+# you saved the fused model, then:
+#   ollama create jarvis-classifier --quantize q4_K_M -f jarvis-classifier.Modelfile
+FROM ./jarvis-classifier-fused
+
+# Qwen2.5 ChatML, so a per-call system prompt (the Day-6 SYSTEM_PROMPT) is honoured.
+TEMPLATE """{{ if .System }}<|im_start|>system
+{{ .System }}<|im_end|>
+{{ end }}{{ if .Prompt }}<|im_start|>user
+{{ .Prompt }}<|im_end|>
+{{ end }}<|im_start|>assistant
+{{ .Response }}"""
+
+PARAMETER stop "<|im_start|>"
+PARAMETER stop "<|im_end|>"
