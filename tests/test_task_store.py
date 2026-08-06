@@ -26,6 +26,7 @@ class TaskStoreTest(unittest.TestCase):
         self.assertEqual(self.store.advance_stage(task), "planning")
         self.assertEqual(self.store.advance_stage(task), "execution")
         self.assertEqual(self.store.advance_stage(task), "validation")
+        self.assertEqual(self.store.advance_stage(task), "security")
         self.assertEqual(self.store.advance_stage(task), "done")
 
     def test_execution_can_return_to_planning(self):
@@ -48,8 +49,8 @@ class TaskStoreTest(unittest.TestCase):
 
     def test_terminal_stage_cannot_advance(self):
         task = self.store.new_task("demo")
-        for _ in range(4):
-            self.store.advance_stage(task)  # -> done
+        for _ in range(5):
+            self.store.advance_stage(task)  # -> done (via security)
         self.assertEqual(task["stage"], "done")
         with self.assertRaises(ValueError):
             self.store.advance_stage(task)

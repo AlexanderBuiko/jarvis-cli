@@ -749,7 +749,7 @@ def _format_task(task: dict) -> str:
     # understanding, the plan, the per-step execution log, validation findings).
     # Goal and Plan are intentionally not shown separately — they live here.
     outputs = task.get("stage_outputs") or {}
-    ordered = [s for s in ("clarification", "planning", "execution", "validation") if s in outputs]
+    ordered = [s for s in ("clarification", "planning", "execution", "validation", "security") if s in outputs]
     if ordered:
         lines += ["", "  Stage results:"]
         for stage in ordered:

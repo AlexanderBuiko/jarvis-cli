@@ -131,7 +131,7 @@ def build_system_prompt(
     return "\n\n".join(parts)
 
 
-_STAGE_ORDER: tuple[str, ...] = ("clarification", "planning", "execution", "validation", "done")
+_STAGE_ORDER: tuple[str, ...] = ("clarification", "planning", "execution", "validation", "security", "done")
 
 
 def build_working_memory_block(task: dict[str, Any]) -> list[dict]:

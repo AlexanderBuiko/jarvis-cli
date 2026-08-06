@@ -147,7 +147,7 @@ class ValidatorTest(unittest.TestCase):
         task = {"stage": "validation", "plan": "p"}
         v = ValidatorAgent().process(task, "All criteria met.")
         self.assertEqual(v.gate, GATE_APPROVAL)
-        self.assertEqual(v.confirm_target, "done")
+        self.assertEqual(v.confirm_target, "security")   # passing validation gates on security
         self.assertEqual(v.reject_target, "execution")   # rework execution
         self.assertEqual(v.replan_target, "planning")    # revise the plan (always available)
         self.assertFalse(v.replan_recommended)

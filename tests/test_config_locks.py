@@ -48,7 +48,7 @@ class ApprovalChoicesTest(unittest.TestCase):
         v = ValidatorAgent().process({"stage": "validation", "plan": "p"}, "findings")
         title, choices = _approval_choices("validation", v)
         targets = [t for _, t in choices]
-        self.assertEqual(targets, ["done", "execution", "planning"])
+        self.assertEqual(targets, ["security", "execution", "planning"])
         # The third option re-plans — the path that was previously unreachable.
         self.assertIn("revise the plan", choices[2][0].lower())
 

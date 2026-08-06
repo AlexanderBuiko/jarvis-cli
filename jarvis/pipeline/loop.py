@@ -376,7 +376,7 @@ class ExecutionLoop:
                     if reworks > self._max_reworks:
                         outcome = OUTCOME_FAILED
                         break
-                    target, pending = self._rework(verdict)
+                    target, pending = self._rework(verdict, result)
                     self._driver.advance_to(target)
                 else:
                     self._driver.advance_to(verdict.confirm_target or "done")
@@ -403,8 +403,21 @@ class ExecutionLoop:
             break_reason=("" if outcome == OUTCOME_DONE else _BREAK_REASON.get(outcome, "")),
         )
 
-    def _rework(self, verdict) -> tuple[str, str]:
-        """The target stage and feedback for a failing validation."""
+    def _rework(self, verdict, result: StageResult) -> tuple[str, str]:
+        """The target stage and feedback for a failing validation or security review.
+
+        A security failure feeds the actual findings back to execution (the brief's
+        "исправь: SQL injection в строке 42"), so the fix is targeted rather than a
+        generic "try again".
+        """
+        if result.stage == "security":
+            findings = (result.text or "").strip()
+            return (
+                verdict.reject_target or "execution",
+                "The security review found Critical/High issue(s) that must be fixed before "
+                "commit:\n" + (findings or "(see the review above)") + "\nRewrite the implementation "
+                "so no Critical or High severity issue remains.",
+            )
         if verdict.replan_recommended:
             return (
                 verdict.replan_target or "planning",

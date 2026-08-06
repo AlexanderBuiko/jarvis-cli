@@ -23,8 +23,13 @@ MARKER_NEEDS_USER = "[[NEEDS_USER]]"  # stage needs a free-text answer from the 
 MARKER_STEP_DONE = "[[STEP_DONE]]"  # execution: this plan step is done, more remain (stay in stage)
 MARKER_REPLAN = "[[REPLAN]]"        # validation: the failure is in the PLAN, not execution -> re-plan
 MARKER_FAIL = "[[FAIL]]"            # validation: a success criterion is NOT met -> rework needed
+MARKER_SECURITY_FAIL = "[[SECURITY_FAIL]]"  # security: a Critical/High issue -> rework before commit
+MARKER_SECURITY_WARN = "[[SECURITY_WARN]]"  # security: only Medium/Low -> proceed, log a warning
 
-ALL_MARKERS = (MARKER_READY, MARKER_NEEDS_USER, MARKER_STEP_DONE, MARKER_REPLAN, MARKER_FAIL)
+ALL_MARKERS = (
+    MARKER_READY, MARKER_NEEDS_USER, MARKER_STEP_DONE, MARKER_REPLAN, MARKER_FAIL,
+    MARKER_SECURITY_FAIL, MARKER_SECURITY_WARN,
+)
 
 # Gate kinds — how the driver must pause.
 GATE_QUESTION = "question"   # agent asked something; read a free-text answer and continue
@@ -71,6 +76,7 @@ EXPECTED_READY_TO_PLAN = "ready_to_plan"
 EXPECTED_AWAIT_PLAN_APPROVAL = "await_plan_approval"
 EXPECTED_READY_TO_VALIDATE = "ready_to_validate"
 EXPECTED_AWAIT_DONE_APPROVAL = "await_done_approval"
+EXPECTED_AWAIT_SECURITY_APPROVAL = "await_security_approval"
 EXPECTED_IN_PROGRESS = "in_progress"
 EXPECTED_STEP_DONE = "step_done"
 EXPECTED_DONE = "done"

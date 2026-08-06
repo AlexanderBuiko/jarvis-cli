@@ -11,6 +11,7 @@ execution REPLAN — are treated as user gates, so the pipeline never silently
 loops; the user is asked to confirm a rework or a replan.
 """
 
+import logging
 import re
 
 from .base import (
@@ -20,9 +21,12 @@ from .base import (
     MARKER_NEEDS_USER,
     MARKER_READY,
     MARKER_REPLAN,
+    MARKER_SECURITY_FAIL,
+    MARKER_SECURITY_WARN,
     MARKER_STEP_DONE,
     EXPECTED_AWAIT_DONE_APPROVAL,
     EXPECTED_AWAIT_PLAN_APPROVAL,
+    EXPECTED_AWAIT_SECURITY_APPROVAL,
     EXPECTED_AWAIT_USER,
     EXPECTED_DONE,
     EXPECTED_READY_TO_PLAN,
@@ -31,6 +35,8 @@ from .base import (
     StageAgent,
     StageVerdict,
 )
+
+_security_log = logging.getLogger("jarvis.pipeline.security")
 
 
 def parse_plan_steps(plan_text: str) -> list[str]:
@@ -296,12 +302,81 @@ class ValidatorAgent(StageAgent):
         # recommends which reject path fits; the user decides.
         return StageVerdict(
             gate=GATE_APPROVAL,
-            confirm_target="done",
+            confirm_target="security",   # a passing validation gates on security, not straight to done
             reject_target="execution",
             replan_target="planning",
             replan_recommended=(MARKER_REPLAN in markers),
             fail_recommended=(MARKER_FAIL in markers or MARKER_REPLAN in markers),
             expected_action=EXPECTED_AWAIT_DONE_APPROVAL,
+        )
+
+
+class SecurityAgent(StageAgent):
+    """Security-review gate — a second LLM pass over the validated deliverable.
+
+    The KB/course requirement is that a security check runs *between generation and
+    commit* and cannot be skipped. Making it an FSM stage (validation → security →
+    done) puts that guarantee in ``resolve_transition``, not in a prompt the model
+    might ignore or a git hook it could bypass with a raw shell commit. The prompt
+    is tuned to this project's stack (Python/stdlib), since the tutor's iOS/Android
+    checklists do not apply here.
+    """
+    stage = "security"
+
+    def system_fragment(self, task: dict) -> str:
+        return (
+            "The active task is in the SECURITY stage. The deliverable already passed functional "
+            "validation; review it now ONLY for security vulnerabilities, before it is committed. "
+            "Do not re-check functionality or style.\n"
+            "For each issue, give a SEVERITY (Critical / High / Medium / Low), the location "
+            "(file/line or the code snippet), and the concrete fix. Check for:\n"
+            "  - Hardcoded secrets, credentials, API keys or tokens in code (must come from env vars).\n"
+            "  - Secrets or PII written to logs, error messages, or exceptions.\n"
+            "  - Plain HTTP where HTTPS is required, or disabled TLS/certificate verification.\n"
+            "  - Missing input validation / injection: shell or command injection (subprocess with "
+            "shell=True, os.system), SQL built by string interpolation, path traversal, unsafe "
+            "deserialization (pickle, yaml.load), eval/exec on untrusted input.\n"
+            "  - Auth tokens or sensitive data stored in plaintext or an insecure location.\n"
+            "Severity guide: Critical/High = an exploitable secret exposure, injection, or "
+            "auth/token mishandling. Medium/Low = defense-in-depth gaps that are not directly "
+            "exploitable. If the deliverable contains no security-relevant code, say it is CLEAN."
+        )
+
+    def entry_message(self, task: dict) -> str:
+        return (
+            "Perform the security review of the produced deliverable. List each finding with its "
+            "severity, location and fix, then emit the correct marker."
+        )
+
+    def marker_protocol(self) -> str:
+        return (
+            "End your reply with exactly one signal:\n"
+            f"  - {MARKER_SECURITY_FAIL} if ANY Critical or High severity issue is present "
+            "(the code must NOT be committed until it is fixed).\n"
+            f"  - {MARKER_SECURITY_WARN} if the worst issue is Medium or Low (it may proceed, but "
+            "the warning is logged).\n"
+            "  - no marker at all if the deliverable is clean."
+        )
+
+    def input_ready(self, task: dict) -> tuple[bool, str]:
+        if not (task.get("stage_outputs") or {}).get("execution"):
+            return False, "security review needs an executed deliverable to inspect"
+        return True, ""
+
+    def interpret(self, markers: set[str]) -> StageVerdict:
+        # The security review is the final gate before commit. Critical/High recommends
+        # a rework (fail_recommended) exactly like a failing validation, so the shared
+        # driver logic reroutes to execution; Medium/Low logs a warning and proceeds.
+        if MARKER_SECURITY_FAIL in markers:
+            _security_log.warning("security review: Critical/High issue found -> rework required before commit")
+        elif MARKER_SECURITY_WARN in markers:
+            _security_log.warning("security review: only Medium/Low issue(s) -> proceeding with warning logged")
+        return StageVerdict(
+            gate=GATE_APPROVAL,
+            confirm_target="done",
+            reject_target="execution",
+            fail_recommended=(MARKER_SECURITY_FAIL in markers),
+            expected_action=EXPECTED_AWAIT_SECURITY_APPROVAL,
         )
 
 
@@ -333,7 +408,8 @@ class DoneAgent(StageAgent):
 # The stage registry: the single place mapping FSM stages to their agents.
 STAGE_AGENTS: dict[str, StageAgent] = {
     agent.stage: agent
-    for agent in (ClarifierAgent(), PlannerAgent(), ExecutorAgent(), ValidatorAgent(), DoneAgent())
+    for agent in (ClarifierAgent(), PlannerAgent(), ExecutorAgent(), ValidatorAgent(),
+                  SecurityAgent(), DoneAgent())
 }
 
 
