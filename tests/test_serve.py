@@ -43,6 +43,21 @@ def test_provider_failure_degrades_to_502_not_a_crash():
     assert "provider call failed" in body["error"]
 
 
+def test_deploy_can_pin_the_model_via_env(monkeypatch):
+    seen: dict = {}
+
+    def spy(system, user, *, provider, model):
+        seen["model"] = model
+        return {"text": "ok"}
+
+    core = LLMCore(complete_fn=spy)
+    monkeypatch.setenv("JARVIS_LLM_MODEL", "meta-llama/llama-3.3-70b-instruct")
+    core.handle_complete({"user": "hi"})               # body names no model -> env pins it
+    assert seen["model"] == "meta-llama/llama-3.3-70b-instruct"
+    core.handle_complete({"user": "hi", "model": "google/gemini-2.5-flash"})
+    assert seen["model"] == "google/gemini-2.5-flash"  # explicit per-request still wins
+
+
 def test_provider_defaults_when_body_omits_it():
     seen: dict = {}
 

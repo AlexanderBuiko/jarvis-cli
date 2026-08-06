@@ -78,7 +78,10 @@ class LLMCore:
             return 400, {"error": "field 'user' (string) is required"}
         system = body.get("system") or ""
         provider = body.get("provider") or self.default_provider
-        model = body.get("model")
+        # A deployment pins its model with JARVIS_LLM_MODEL (callers rarely name one, and
+        # the provider's baseline default may not be what the deploy pays for); an explicit
+        # per-request model still wins.
+        model = body.get("model") or os.environ.get("JARVIS_LLM_MODEL")
         try:
             return 200, self._complete(system, user, provider=provider, model=model)
         except Exception as exc:  # noqa: BLE001 — report as 502, never crash the core
