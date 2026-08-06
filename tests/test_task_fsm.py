@@ -16,11 +16,19 @@ from jarvis.pipeline.fsm import (
 
 
 class StagesTest(unittest.TestCase):
-    def test_the_five_canonical_stages_are_in_order(self):
+    def test_the_canonical_stages_are_in_order(self):
         self.assertEqual(
             STAGES,
-            ("clarification", "planning", "execution", "validation", "done"),
+            ("clarification", "planning", "execution", "validation", "security", "done"),
         )
+
+    def test_no_task_can_reach_done_without_passing_security(self):
+        # The whole point of the security stage: done is reachable only from security,
+        # and validation can no longer jump straight to done.
+        self.assertFalse(is_allowed("validation", "done"))
+        self.assertTrue(is_allowed("validation", "security"))
+        self.assertTrue(is_allowed("security", "done"))
+        self.assertTrue(is_allowed("security", "execution"))  # Critical/High -> rework
 
     def test_every_stage_has_a_transition_entry(self):
         self.assertEqual(set(ALLOWED_TRANSITIONS), set(STAGES))

@@ -12,14 +12,20 @@ entries are revision/branch targets that must be requested explicitly.
 """
 
 # Task state machine. Basic stages; expand with caution (the KB warns against
-# removing core stages but allows adding them).
-STAGES: tuple[str, ...] = ("clarification", "planning", "execution", "validation", "done")
+# removing core stages but allows adding them). ``security`` is such an addition:
+# a mandatory review gate between validation and done, so no deliverable can reach
+# ``done`` (commit) without passing a security review — the transition table, not
+# the model, enforces it (see resolve_transition).
+STAGES: tuple[str, ...] = (
+    "clarification", "planning", "execution", "validation", "security", "done",
+)
 
 ALLOWED_TRANSITIONS: dict[str, list[str]] = {
     "clarification": ["planning"],
     "planning":      ["execution"],
     "execution":     ["validation", "planning"],  # validate, or back to planning to revise
-    "validation":    ["done", "execution", "planning"],  # done, rework execution, or re-plan
+    "validation":    ["security", "execution", "planning"],  # gate on security, rework, or re-plan
+    "security":      ["done", "execution"],  # clean/warn -> commit, Critical/High -> rework
     "done":          [],
 }
 

@@ -234,7 +234,7 @@ class SwarmEndToEndTest(unittest.TestCase):
         self.assertEqual(result.verdict.gate, GATE_APPROVAL)
         # The 3-way gate is intact, and the swarm's REVISE_PLAN annotated it.
         self.assertTrue(result.verdict.replan_recommended)
-        self.assertEqual(result.verdict.confirm_target, "done")
+        self.assertEqual(result.verdict.confirm_target, "security")
         self.assertEqual(result.verdict.reject_target, "execution")
         self.assertEqual(result.verdict.replan_target, "planning")
         self.assertEqual(task["stage"], "validation")  # no auto-advance at the gate

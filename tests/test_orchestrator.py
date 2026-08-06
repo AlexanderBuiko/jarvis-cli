@@ -91,7 +91,7 @@ class OrchestratorStepTest(unittest.TestCase):
         self._returns("Looks good.")
         result = self.orch.step(task)
         self.assertEqual(result.verdict.gate, GATE_APPROVAL)
-        self.assertEqual(result.verdict.confirm_target, "done")
+        self.assertEqual(result.verdict.confirm_target, "security")
         self.assertEqual(task["stage"], "validation")
 
     def test_blocked_input_contract(self):

@@ -580,9 +580,21 @@ def _approval_choices(stage: str, verdict) -> tuple[str, list[tuple[str, str | N
         return (
             "Validation complete — what next?",
             [
-                ("Confirm — mark done", verdict.confirm_target),
+                ("Confirm — send to security review", verdict.confirm_target),
                 ("Reject — rework execution", verdict.reject_target),
                 (replan_label, verdict.replan_target),
+            ],
+        )
+    if stage == "security":
+        confirm_label = "Confirm — commit (mark done)"
+        reject_label = "Reject — rework execution"
+        if getattr(verdict, "fail_recommended", False):
+            reject_label += "  (recommended: Critical/High found)"
+        return (
+            "Security review complete — what next?",
+            [
+                (confirm_label, verdict.confirm_target),
+                (reject_label, verdict.reject_target),
             ],
         )
     return (
